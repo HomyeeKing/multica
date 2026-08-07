@@ -15,7 +15,7 @@ const updateAgentSpy = vi.hoisted(() =>
 const archiveSpy = vi.hoisted(() => vi.fn(async () => ({})));
 const restoreSpy = vi.hoisted(() => vi.fn(async () => ({})));
 const cancelTasksSpy = vi.hoisted(() =>
-  vi.fn(async () => ({ cancelled: 2 })),
+  vi.fn(async (_id: string) => ({ cancelled: 2 })),
 );
 
 vi.mock("@multica/core/hooks", () => ({
