@@ -13,10 +13,6 @@ const (
 	// The access model exists to gate Composio sharing, so the two ship on the
 	// same switch.
 	ComposioMCPApps = "composio_mcp_apps"
-	// SavedIssueViews gates server-backed saved issue views (MUL-4796): the
-	// CRUD endpoints and the web/desktop selector + save dialog. Global
-	// switch, default off; enable per environment during rollout.
-	SavedIssueViews = "saved_issue_views_v1"
 	// DesktopHangStackCapture gates reading a JS call stack out of a hung
 	// desktop renderer (MUL-5345). Capture holds a debugger channel open on
 	// every renderer, so the desktop client is fail-closed: it stays off unless
@@ -43,11 +39,6 @@ const (
 var frontendPublicFlags = []string{
 	ComposioMCPApps,
 	DesktopHangStackCapture,
-	SavedIssueViews,
-}
-
-func SavedIssueViewsEnabled(ctx context.Context, flags *featureflag.Service) bool {
-	return flags.IsEnabled(ctx, SavedIssueViews, false)
 }
 
 func ComposioMCPAppsEnabled(ctx context.Context, flags *featureflag.Service) bool {

@@ -8,20 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/multica-ai/multica/server/internal/featureflags"
-	"github.com/multica-ai/multica/server/pkg/featureflag"
 )
-
-// enableIssueViews flips the saved_issue_views_v1 flag on for the duration of
-// one test and restores the previous (nil = everything default-off) service.
-func enableIssueViews(t *testing.T) {
-	t.Helper()
-	prev := testHandler.FeatureFlags
-	provider := featureflag.NewStaticProvider()
-	provider.Set(featureflags.SavedIssueViews, featureflag.Rule{Default: true})
-	testHandler.FeatureFlags = featureflag.NewService(provider)
-	t.Cleanup(func() { testHandler.FeatureFlags = prev })
-}
 
 func createIssueViewForTest(t *testing.T, body map[string]any) (IssueViewResponse, int, string) {
 	t.Helper()
@@ -38,17 +25,7 @@ func createIssueViewForTest(t *testing.T, body map[string]any) (IssueViewRespons
 	return view, w.Code, w.Body.String()
 }
 
-func TestIssueViewsGatedByFlag(t *testing.T) {
-	// No flag service configured → the feature does not exist: 404.
-	w := httptest.NewRecorder()
-	testHandler.ListIssueViews(w, newRequest("GET", "/api/issue-views?scope_type=workspace", nil))
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 with flag off, got %d", w.Code)
-	}
-}
-
 func TestCreateAndListIssueView(t *testing.T) {
-	enableIssueViews(t)
 
 	view, code, body := createIssueViewForTest(t, map[string]any{
 		"name":       "Needs review",
@@ -86,7 +63,6 @@ func TestCreateAndListIssueView(t *testing.T) {
 }
 
 func TestMyIssueViewForcedPrivate(t *testing.T) {
-	enableIssueViews(t)
 
 	view, code, body := createIssueViewForTest(t, map[string]any{
 		"name":          "My assigned",
@@ -107,7 +83,6 @@ func TestMyIssueViewForcedPrivate(t *testing.T) {
 }
 
 func TestIssueViewPrivateInvisibleToOthers(t *testing.T) {
-	enableIssueViews(t)
 
 	view, code, body := createIssueViewForTest(t, map[string]any{
 		"name":       "Mine only",
@@ -145,7 +120,6 @@ func TestIssueViewPrivateInvisibleToOthers(t *testing.T) {
 }
 
 func TestUpdateIssueViewRevisionConflict(t *testing.T) {
-	enableIssueViews(t)
 
 	view, code, body := createIssueViewForTest(t, map[string]any{
 		"name":       "Conflict target",
@@ -207,7 +181,6 @@ func createSecondWorkspaceMember(t *testing.T) string {
 }
 
 func TestWorkspaceIssueViewVariant(t *testing.T) {
-	enableIssueViews(t)
 
 	// Save from the Agents tab: variant persists.
 	view, code, body := createIssueViewForTest(t, map[string]any{
@@ -267,7 +240,6 @@ func TestWorkspaceIssueViewVariant(t *testing.T) {
 }
 
 func TestProjectIssueViewVariant(t *testing.T) {
-	enableIssueViews(t)
 
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
@@ -331,7 +303,6 @@ func TestProjectIssueViewVariant(t *testing.T) {
 }
 
 func TestPinIssueView(t *testing.T) {
-	enableIssueViews(t)
 
 	shared, code, body := createIssueViewForTest(t, map[string]any{
 		"name":       "Pinnable",

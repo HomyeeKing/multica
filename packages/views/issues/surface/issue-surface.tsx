@@ -18,8 +18,6 @@ import { useActiveIssueView } from "@multica/core/issue-views/use-active-view";
 import { baselineFromQuery } from "@multica/core/issue-views/baseline";
 import { ViewBaselineProvider, useViewBaseline } from "./view-baseline-context";
 import type { IssueViewScope } from "@multica/core/issue-views/queries";
-import { useFeatureEnabled } from "@multica/core/config";
-import { SAVED_ISSUE_VIEWS_FLAG } from "@multica/core/feature-flags";
 import {
   actorKindForViewVariant,
   issueScopeKey,
@@ -74,7 +72,6 @@ export function IssueSurface({
   contentClassName,
 }: IssueSurfaceComponentProps) {
   const wsId = useWorkspaceId();
-  const savedViewsEnabled = useFeatureEnabled(SAVED_ISSUE_VIEWS_FLAG) === true;
   // Saved views exist on workspace / my / project surfaces only.
   const viewScope: IssueViewScope | null =
     scope.type === "workspace"
@@ -84,7 +81,7 @@ export function IssueSurface({
         : scope.type === "project"
           ? { scope_type: "project", scope_id: scope.projectId }
           : null;
-  const { activeView } = useActiveIssueView(wsId, viewScope, savedViewsEnabled);
+  const { activeView } = useActiveIssueView(wsId, viewScope);
 
   // An open saved view swaps the surface onto its own view-preference key:
   // display/extra-filter adjustments persist per user per view, and the

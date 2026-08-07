@@ -57,9 +57,6 @@ type IssueViewPreferenceResponse struct {
 }
 
 func (h *Handler) GetIssueViewPreference(w http.ResponseWriter, r *http.Request) {
-	if !h.issueViewsEnabled(w, r) {
-		return
-	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -108,9 +105,6 @@ type PutIssueViewPreferenceRequest struct {
 }
 
 func (h *Handler) PutIssueViewPreference(w http.ResponseWriter, r *http.Request) {
-	if !h.issueViewsEnabled(w, r) {
-		return
-	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return

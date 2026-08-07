@@ -103,8 +103,6 @@ import { useAuthStore } from "@multica/core/auth";
 import type { IssueViewScope } from "@multica/core/issue-views/queries";
 import { actorFilterKey, baselineFromQuery, type IssueViewBaseline } from "@multica/core/issue-views/baseline";
 import type { IssueView } from "@multica/core/api/schemas";
-import { useFeatureEnabled } from "@multica/core/config";
-import { SAVED_ISSUE_VIEWS_FLAG } from "@multica/core/feature-flags";
 import { addDaysDateOnly, dateOnlyToLocalDate, formatDateOnly, toDateOnly, todayDateOnly } from "@multica/core/issues/date";
 import {
   useIssuesScope,
@@ -904,9 +902,6 @@ export function IssuesHeader({
 }) {
   const { t } = useT("issues");
   const [saveViewOpen, setSaveViewOpen] = useState(false);
-  // Explicit === true: an older backend that omits the flag must hide the
-  // whole feature (API-compat rules).
-  const savedViewsEnabled = useFeatureEnabled(SAVED_ISSUE_VIEWS_FLAG) === true;
   const headerWsId = useWorkspaceId();
   const viewListScope: IssueViewScope | null = saveViewScope
     ? saveViewScope.kind === "project"
@@ -916,7 +911,6 @@ export function IssuesHeader({
   const { activeView, views, viewsReady, setActive, missing } = useActiveIssueView(
     headerWsId,
     viewListScope,
-    savedViewsEnabled,
   );
   // The open view vanished (deleted / access revoked): fall back to the
   // built-in default and say so — never a blank page (§7).
@@ -1002,7 +996,7 @@ export function IssuesHeader({
         {/* Left: the view bar — built-in tabs and saved views as one flat,
             per-user ordered row; wraps instead of overflowing. */}
         <div className="hidden min-w-0 flex-1 md:block">
-          {savedViewsEnabled && saveViewScope && viewListScope ? (
+          {saveViewScope && viewListScope && (
             <ViewBar
               wsId={headerWsId}
               scope={viewListScope}
@@ -1031,30 +1025,6 @@ export function IssuesHeader({
                 setSaveViewOpen(true);
               }}
             />
-          ) : (
-            <div className="flex items-center gap-1">
-              {SCOPE_VALUES.map((s) => (
-                <Tooltip key={s}>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={
-                          scope === s
-                            ? "bg-accent text-accent-foreground hover:bg-accent/80"
-                            : "text-muted-foreground"
-                        }
-                        onClick={() => setScope(s)}
-                      >
-                        {t(($) => $.scope[SCOPE_LABEL_KEY[s]])}
-                      </Button>
-                    }
-                  />
-                  <TooltipContent side="bottom">{t(($) => $.scope[SCOPE_DESC_KEY[s]])}</TooltipContent>
-                </Tooltip>
-              ))}
-            </div>
           )}
         </div>
 
@@ -1119,7 +1089,7 @@ export function IssuesHeader({
           : undefined
       }
       onSave={
-        savedViewsEnabled && saveViewScope
+        saveViewScope
           ? () => {
               setEditTarget(
                 activeView && isViewOwner
@@ -1131,7 +1101,7 @@ export function IssuesHeader({
           : undefined
       }
     />
-    {savedViewsEnabled && dialogScope && (
+    {dialogScope && (
       <SaveViewDialog
         open={saveViewOpen}
         onOpenChange={setSaveViewOpen}

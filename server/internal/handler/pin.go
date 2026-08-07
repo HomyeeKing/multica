@@ -119,11 +119,6 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "view":
-		// Same gate as every view endpoint: with the feature off the type
-		// does not exist (404), and clients learn nothing.
-		if !h.issueViewsEnabled(w, r) {
-			return
-		}
 		// Same read rule as the view endpoints: your own views, or views
 		// shared to the workspace. Foreign private views 404 — a pin must
 		// never confirm their existence.

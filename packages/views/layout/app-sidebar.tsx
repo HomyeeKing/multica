@@ -57,8 +57,6 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useAuthStore } from "@multica/core/auth";
-import { useFeatureEnabled } from "@multica/core/config";
-import { SAVED_ISSUE_VIEWS_FLAG } from "@multica/core/feature-flags";
 import { issueViewDetailOptions } from "@multica/core/issue-views/queries";
 import {
   issueViewContainerKey,
@@ -287,10 +285,6 @@ function PinRow({
 }) {
   const isIssue = pin.item_type === "issue";
   const isView = pin.item_type === "view";
-  // Explicit === true: with the flag off (or an older backend) view pins
-  // stay dormant — hidden but never auto-unpinned, so the pin survives
-  // until the feature is reachable again (API-compat rules).
-  const savedViewsEnabled = useFeatureEnabled(SAVED_ISSUE_VIEWS_FLAG) === true;
   const p = useWorkspacePaths();
   const setActiveView = useActiveIssueViewStore((s) => s.setActive);
   const issueQuery = useQuery({
@@ -303,16 +297,15 @@ function PinRow({
   });
   const viewQuery = useQuery({
     ...issueViewDetailOptions(wsId, pin.item_id),
-    enabled: isView && savedViewsEnabled,
+    enabled: isView,
   });
 
   const triggeredRef = useRef(false);
   useEffect(() => {
-    // Views are exempt from 404-auto-unpin: their endpoint also 404s when
-    // the feature flag is switched off server-side, and a session that
-    // booted with the flag on cannot tell the two apart — auto-unpinning
-    // would permanently delete every view pin on a flag flip. A deleted
-    // view's row simply hides instead.
+    // Views are exempt from 404-auto-unpin: an installed desktop client
+    // talking to an older backend without the view endpoints sees 404 for
+    // every view pin — auto-unpinning would permanently delete them all.
+    // A deleted view's row simply hides instead.
     if (isView) return;
     const err = isIssue ? issueQuery.error : projectQuery.error;
     if (err instanceof ApiError && err.status === 404 && !triggeredRef.current) {
@@ -323,7 +316,6 @@ function PinRow({
 
   const activeViewByContainer = useActiveIssueViewStore((s) => s.active);
   if (isView) {
-    if (!savedViewsEnabled) return null;
     if (viewQuery.isPending) return <PinSkeleton />;
     if (viewQuery.isError || !viewQuery.data) return null;
     const view = viewQuery.data;

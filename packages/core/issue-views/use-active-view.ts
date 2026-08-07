@@ -20,7 +20,6 @@ const EMPTY_VIEWS: IssueView[] = [];
 export function useActiveIssueView(
   wsId: string,
   scope: IssueViewScope | null,
-  enabled: boolean,
 ) {
   const containerKey = scope ? issueViewContainerKey(wsId, scope) : "";
   const activeViewId = useActiveIssueViewStore((s) =>
@@ -30,7 +29,7 @@ export function useActiveIssueView(
 
   const listQuery = useQuery({
     ...issueViewListOptions(wsId, scope ?? { scope_type: "workspace" }),
-    enabled: enabled && !!scope && !!wsId,
+    enabled: !!scope && !!wsId,
   });
   const views = listQuery.data ?? EMPTY_VIEWS;
   const activeView = activeViewId

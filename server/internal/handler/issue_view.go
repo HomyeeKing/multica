@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/multica-ai/multica/server/internal/featureflags"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -85,17 +84,6 @@ func issueViewToResponse(v db.IssueView) IssueViewResponse {
 	}
 }
 
-// issueViewsEnabled gates every saved-view endpoint. While the flag is off
-// the feature does not exist: routes answer 404, never 403, so probing
-// clients learn nothing.
-func (h *Handler) issueViewsEnabled(w http.ResponseWriter, r *http.Request) bool {
-	if featureflags.SavedIssueViewsEnabled(r.Context(), h.FeatureFlags) {
-		return true
-	}
-	writeError(w, http.StatusNotFound, "not found")
-	return false
-}
-
 // canReadIssueView: owner always; workspace-shared views for any member.
 // (My-scope views are constrained to private by the DB CHECK, so they only
 // ever match the owner branch.)
@@ -120,9 +108,6 @@ type CreateIssueViewRequest struct {
 }
 
 func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
-	if !h.issueViewsEnabled(w, r) {
-		return
-	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -217,9 +202,6 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListIssueViews(w http.ResponseWriter, r *http.Request) {
-	if !h.issueViewsEnabled(w, r) {
-		return
-	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -283,9 +265,6 @@ func (h *Handler) loadIssueViewForUser(w http.ResponseWriter, r *http.Request, u
 }
 
 func (h *Handler) GetIssueViewByID(w http.ResponseWriter, r *http.Request) {
-	if !h.issueViewsEnabled(w, r) {
-		return
-	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -327,9 +306,6 @@ type UpdateIssueViewRequest struct {
 }
 
 func (h *Handler) UpdateIssueView(w http.ResponseWriter, r *http.Request) {
-	if !h.issueViewsEnabled(w, r) {
-		return
-	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -424,9 +400,6 @@ func (h *Handler) UpdateIssueView(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteIssueView(w http.ResponseWriter, r *http.Request) {
-	if !h.issueViewsEnabled(w, r) {
-		return
-	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return

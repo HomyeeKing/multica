@@ -1276,8 +1276,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Delete("/{itemType}/{itemId}", h.DeletePin)
 			})
 
-			// Saved issue views (MUL-4796). Every endpoint is gated on the
-			// saved_issue_views_v1 feature flag inside the handler.
+			// Saved issue views (MUL-4796).
 			r.Get("/api/issue-view-preferences", h.GetIssueViewPreference)
 			r.Put("/api/issue-view-preferences", h.PutIssueViewPreference)
 			r.Route("/api/issue-views", func(r chi.Router) {

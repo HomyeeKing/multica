@@ -10,7 +10,6 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import type {
   Issue,
   IssueTableFacetSpec,
@@ -33,8 +32,6 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { baselineFromQuery } from "@multica/core/issue-views/baseline";
 import { ViewBar } from "../../issues/components/view-bar";
 import type { IssueView } from "@multica/core/api/schemas";
-import { useFeatureEnabled } from "@multica/core/config";
-import { SAVED_ISSUE_VIEWS_FLAG } from "@multica/core/feature-flags";
 
 /** My Issues tab → saved-view scope_variant (API vocabulary). */
 const SAVE_VARIANT: Record<MyIssuesScope, Extract<SaveViewScope, { kind: "my" }>["variant"]> = {
@@ -70,13 +67,11 @@ export function MyIssuesHeader({
   const { t } = useT("my-issues");
   const { t: tIssues } = useT("issues");
   const [saveViewOpen, setSaveViewOpen] = useState(false);
-  const savedViewsEnabled = useFeatureEnabled(SAVED_ISSUE_VIEWS_FLAG) === true;
   const saveScope: SaveViewScope = { kind: "my", variant: SAVE_VARIANT[scope] };
   const wsId = useWorkspaceId();
   const { activeView, views, viewsReady, setActive, missing } = useActiveIssueView(
     wsId,
     { scope_type: "my" },
-    savedViewsEnabled,
   );
   useEffect(() => {
     if (missing) {
@@ -106,58 +101,32 @@ export function MyIssuesHeader({
     <div className="min-h-12 shrink-0 px-4 py-2 [-webkit-overflow-scrolling:touch]">
       <div className="flex w-full min-w-0 items-start justify-between gap-2">
         <div className="hidden min-w-0 flex-1 md:block">
-          {savedViewsEnabled ? (
-            <ViewBar
-              wsId={wsId}
-              scope={{ scope_type: "my" }}
-              builtins={SCOPES.map((s) => ({
-                key: s.value,
-                label: s.label,
-                description: s.description,
-                active: !activeView && scope === s.value,
-                onSelect: () => {
-                  if (activeView) setActive(null);
-                  onScopeChange(s.value);
-                },
-              }))}
-              views={views}
-              viewsReady={viewsReady}
-              activeView={activeView}
-              onSelectView={(view) => setActive(view ? view.id : null)}
-              onNewView={() => {
-                setEditTarget(null);
-                setSaveViewOpen(true);
-              }}
-              onEditView={(view) => {
-                setEditTarget({ view, fromDefinition: true });
-                setSaveViewOpen(true);
-              }}
-            />
-          ) : (
-            <div className="flex items-center gap-1">
-              {SCOPES.map((s) => (
-                <Tooltip key={s.value}>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={
-                          scope === s.value
-                            ? "bg-accent text-accent-foreground hover:bg-accent/80"
-                            : "text-muted-foreground"
-                        }
-                        onClick={() => onScopeChange(s.value)}
-                      >
-                        {s.label}
-                      </Button>
-                    }
-                  />
-                  <TooltipContent side="bottom">{s.description}</TooltipContent>
-                </Tooltip>
-              ))}
-            </div>
-          )}
+          <ViewBar
+            wsId={wsId}
+            scope={{ scope_type: "my" }}
+            builtins={SCOPES.map((s) => ({
+              key: s.value,
+              label: s.label,
+              description: s.description,
+              active: !activeView && scope === s.value,
+              onSelect: () => {
+                if (activeView) setActive(null);
+                onScopeChange(s.value);
+              },
+            }))}
+            views={views}
+            viewsReady={viewsReady}
+            activeView={activeView}
+            onSelectView={(view) => setActive(view ? view.id : null)}
+            onNewView={() => {
+              setEditTarget(null);
+              setSaveViewOpen(true);
+            }}
+            onEditView={(view) => {
+              setEditTarget({ view, fromDefinition: true });
+              setSaveViewOpen(true);
+            }}
+          />
         </div>
 
         <DropdownMenu>
@@ -212,26 +181,20 @@ export function MyIssuesHeader({
     <FilterChipsBar
       viewBaseline={viewBaseline}
       saveLabel={activeView ? tIssues(($) => $.filters.chip_edit) : undefined}
-      onSave={
-        savedViewsEnabled
-          ? () => {
-              setEditTarget(
-                activeView ? { view: activeView, fromDefinition: false } : null,
-              );
-              setSaveViewOpen(true);
-            }
-          : undefined
-      }
+      onSave={() => {
+        setEditTarget(
+          activeView ? { view: activeView, fromDefinition: false } : null,
+        );
+        setSaveViewOpen(true);
+      }}
     />
-    {savedViewsEnabled && (
-      <SaveViewDialog
-        open={saveViewOpen}
-        onOpenChange={setSaveViewOpen}
-        scope={saveScope}
-        editView={editTarget?.view ?? null}
-        seedFromDefinition={editTarget?.fromDefinition ?? false}
-      />
-    )}
+    <SaveViewDialog
+      open={saveViewOpen}
+      onOpenChange={setSaveViewOpen}
+      scope={saveScope}
+      editView={editTarget?.view ?? null}
+      seedFromDefinition={editTarget?.fromDefinition ?? false}
+    />
     </>
   );
 }

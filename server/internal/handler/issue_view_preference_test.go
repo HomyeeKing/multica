@@ -9,7 +9,6 @@ import (
 )
 
 func TestIssueViewPreferenceRoundTrip(t *testing.T) {
-	enableIssueViews(t)
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(),
 			`DELETE FROM issue_view_preference WHERE workspace_id = $1`, testWorkspaceID)
@@ -72,7 +71,6 @@ func TestIssueViewPreferenceRoundTrip(t *testing.T) {
 }
 
 func TestIssueViewPreferenceIsPerUser(t *testing.T) {
-	enableIssueViews(t)
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(),
 			`DELETE FROM issue_view_preference WHERE workspace_id = $1`, testWorkspaceID)
