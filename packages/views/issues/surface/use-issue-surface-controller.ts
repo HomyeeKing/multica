@@ -402,7 +402,15 @@ export function useIssueSurfaceController({
         };
         break;
       case "project":
-        queryScope = { kind: "project", project_id: scope.projectId };
+        queryScope = {
+          kind: "project",
+          project_id: scope.projectId,
+          ...(scope.actorKind === "members"
+            ? { assignee_types: ["member" as const] }
+            : scope.actorKind === "agents"
+              ? { assignee_types: ["agent" as const, "squad" as const] }
+              : {}),
+        };
         break;
       case "my":
         queryScope = {
