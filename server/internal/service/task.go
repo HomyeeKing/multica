@@ -3681,12 +3681,27 @@ func (s *TaskService) writeChatCompletionOutcome(ctx context.Context, qtx *db.Qu
 		params.Content = redact.Text(body)
 		// message_kind left NULL → COALESCE defaults to 'message'.
 		//
-		// This used to stamp 'onboarding_opening' when the turn's input batch
-		// contained the kickoff, back when the kickoff was a turn of its own.
-		// The server writes the opening directly now (MUL-5827) and the kickoff
-		// rides into the member's FIRST REAL turn — so that rule would stamp
-		// their first answer as the opening and render the starter cards a
-		// second time, under a reply that is not an opening at all.
+		// The one exception is now a deploy-window case. The server writes the
+		// opening directly (MUL-5827), so no new task ever produces one — but a
+		// kickoff task enqueued by the previous server can still be claimed by
+		// this one, and its reply IS that member's opening. Leaving it a plain
+		// 'message' would permanently cost that session its starter cards.
+		//
+		// Gated on "the batch is a kickoff and nothing else", which is precisely
+		// the old shape: the new kickoff rides in alongside a real member
+		// message, and stamping that turn would render the cards a second time
+		// under a reply that is not an opening.
+		//
+		// Keyed on chatInputOwnerID, not task.ID: an auto-retry clone gets a
+		// fresh id while inheriting the root's chat_input_task_id (MUL-4351),
+		// and the kickoff user row stays bound to the root.
+		openingOnly, err := qtx.TaskInputIsOnboardingKickoffOnly(ctx, chatInputOwnerID(task))
+		if err != nil {
+			return nil, fmt.Errorf("check onboarding kickoff input: %w", err)
+		}
+		if openingOnly.Bool {
+			params.MessageKind = pgtype.Text{String: protocol.ChatMessageKindOnboardingOpening, Valid: true}
+		}
 	case pendingAttachments > 0:
 		// Image/file-only reply: a real 'message' outcome with empty text — the
 		// attachment cards ARE the response, so it must not read as no_response.

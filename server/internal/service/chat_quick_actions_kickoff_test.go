@@ -151,6 +151,58 @@ func TestWriteChatCompletionOutcomeNeverStampsOnboardingOpening(t *testing.T) {
 	}
 }
 
+// TestWriteChatCompletionOutcomeStampsAPreDeployKickoffTurn covers the rolling
+// deploy: a kickoff task the PREVIOUS server enqueued, claimed by this one. Its
+// input is a kickoff and nothing else — the old shape — and its reply really is
+// that member's opening, so it must still be stamped. message_kind is
+// persisted and nothing recomputes it, so getting this wrong costs that session
+// its starter cards permanently.
+func TestWriteChatCompletionOutcomeStampsAPreDeployKickoffTurn(t *testing.T) {
+	pool := newResolveOriginatorPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
+
+	var chatSessionID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
+		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
+		t.Fatalf("seed chat session: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+	})
+
+	var taskID string
+	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&taskID); err != nil {
+		t.Fatalf("new task id: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id)
+		VALUES ($1, 'user', 'kickoff context', 'onboarding_kickoff', $2)`, chatSessionID, taskID); err != nil {
+		t.Fatalf("seed pre-deploy kickoff turn: %v", err)
+	}
+
+	svc := &TaskService{Queries: q, TxStarter: pool}
+	result, _ := json.Marshal(protocol.TaskCompletedPayload{Output: "Hi, I'm Mika."})
+	row, err := svc.writeChatCompletionOutcome(ctx, q, db.AgentTaskQueue{
+		ID:            util.MustParseUUID(taskID),
+		ChatSessionID: util.MustParseUUID(chatSessionID),
+		AgentID:       util.MustParseUUID(agentID),
+	}, result)
+	if err != nil {
+		t.Fatalf("writeChatCompletionOutcome: %v", err)
+	}
+	if row == nil {
+		t.Fatal("writeChatCompletionOutcome wrote no row")
+	}
+	if row.MessageKind != protocol.ChatMessageKindOnboardingOpening {
+		t.Fatalf("pre-deploy kickoff reply kind = %q, want %q — that session loses its starter cards",
+			row.MessageKind, protocol.ChatMessageKindOnboardingOpening)
+	}
+}
+
 // TestOnboardingKickoffSurvivesCancelAndReanchor covers the two shared chat
 // mechanisms that a two-row input batch newly exposes. Both used to be safe by
 // assumption ("a direct send owns exactly one user row"), and both would fail

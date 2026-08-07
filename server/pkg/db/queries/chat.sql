@@ -1198,6 +1198,40 @@ WHERE task_id = $1 AND role = 'assistant'
 ORDER BY created_at DESC
 LIMIT 1;
 
+-- name: TaskInputIsOnboardingKickoffOnly :one
+-- Whether this input batch is a kickoff and NOTHING else — the shape only a
+-- pre-MUL-5827 opening task has, where the kickoff was a turn of its own.
+--
+-- Reachable exclusively during a rolling deploy: a kickoff task enqueued by the
+-- old server and claimed by the new one. The reply to it is still that member's
+-- opening, so it still has to be stamped, or their session permanently renders
+-- without the starter cards (the kind is persisted; nothing recomputes it).
+--
+-- The "and nothing else" half is what makes this safe to keep: an input batch
+-- that pairs the kickoff with a real member message is the NEW shape, and
+-- stamping that turn would render the starter cards a second time under a reply
+-- that is not an opening.
+--
+-- Delete this once no pre-deploy kickoff tasks can still be in flight; nothing
+-- creates this shape any more.
+--
+-- $1 is the INPUT-OWNING task id — COALESCE(task.chat_input_task_id, task.id),
+-- i.e. chatInputOwnerID — never a retry clone's own id, since the whole retry
+-- chain consumes the root's input batch (MUL-4351).
+SELECT
+    EXISTS (
+        SELECT 1 FROM chat_message AS kickoff
+        WHERE kickoff.task_id = sqlc.arg(task_id)
+          AND kickoff.role = 'user'
+          AND kickoff.message_kind = 'onboarding_kickoff'
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM chat_message AS typed
+        WHERE typed.task_id = sqlc.arg(task_id)
+          AND typed.role = 'user'
+          AND typed.message_kind <> 'onboarding_kickoff'
+    ) AS kickoff_only;
+
 -- name: CreateMikaOnboardingOpening :one
 -- Mika's opening reply, written by the server rather than produced by an agent
 -- run (MUL-5827). Paired with the hidden kickoff row in one transaction, which
