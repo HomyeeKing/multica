@@ -3955,6 +3955,19 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 		// be claimed between the status flip and this row, placing its user input
 		// before the failure it follows.
 		if t.ChatSessionID.Valid && retried == nil {
+			// This turn is dead, so anything it owned has to go back. An adopted
+			// onboarding kickoff would otherwise stay bound to a task that will
+			// never run again: the member's next message would reach Mika with
+			// no onboarding context and no record that she had already greeted
+			// them, and she would introduce herself a second time (MUL-5827).
+			//
+			// Gated on retried == nil on purpose. A retry child inherits the
+			// root's chat_input_task_id, and the kickoff stays bound to that
+			// root, so the retry still reads it — releasing here would strip
+			// the context off a turn that is about to run.
+			if err := qtx.ReleaseOnboardingKickoffFromTask(ctx, chatInputOwnerID(t)); err != nil {
+				return fmt.Errorf("release onboarding kickoff: %w", err)
+			}
 			if _, err := createAssistantChatMessage(ctx, qtx, db.CreateChatMessageParams{
 				ChatSessionID: t.ChatSessionID,
 				Role:          "assistant",

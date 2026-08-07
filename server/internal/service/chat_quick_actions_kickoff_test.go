@@ -280,3 +280,70 @@ func TestOnboardingKickoffSurvivesCancelAndReanchor(t *testing.T) {
 		t.Fatalf("unowned row kind = %q, want the kickoff", orphanKind)
 	}
 }
+
+// TestFailedFirstTurnReleasesTheOnboardingKickoff covers the failure this was
+// caught by in a live environment: the member's first turn died in preparation,
+// the adopted kickoff stayed bound to that dead task, and their next message
+// reached Mika with no onboarding context — so she introduced herself a second
+// time, in a conversation she had already opened.
+func TestFailedFirstTurnReleasesTheOnboardingKickoff(t *testing.T) {
+	pool := newResolveOriginatorPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
+
+	var chatSessionID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
+		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
+		t.Fatalf("seed chat session: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+	})
+
+	var taskID string
+	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&taskID); err != nil {
+		t.Fatalf("new task id: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id)
+		VALUES ($1, 'user', 'kickoff context', 'onboarding_kickoff', $2)`, chatSessionID, taskID); err != nil {
+		t.Fatalf("seed adopted kickoff: %v", err)
+	}
+
+	if err := q.ReleaseOnboardingKickoffFromTask(ctx, util.MustParseUUID(taskID)); err != nil {
+		t.Fatalf("ReleaseOnboardingKickoffFromTask: %v", err)
+	}
+
+	// Unowned again, so the member's next send re-adopts it.
+	var orphans int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM chat_message
+		 WHERE chat_session_id = $1 AND message_kind = 'onboarding_kickoff' AND task_id IS NULL`,
+		chatSessionID).Scan(&orphans); err != nil {
+		t.Fatalf("count orphaned kickoffs: %v", err)
+	}
+	if orphans != 1 {
+		t.Fatalf("kickoff orphan count = %d, want 1 — the next turn would lose its onboarding context", orphans)
+	}
+
+	var nextTaskID string
+	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&nextTaskID); err != nil {
+		t.Fatalf("new task id: %v", err)
+	}
+	if err := q.AdoptOrphanOnboardingKickoff(ctx, db.AdoptOrphanOnboardingKickoffParams{
+		ChatSessionID: util.MustParseUUID(chatSessionID),
+		TaskID:        util.MustParseUUID(nextTaskID),
+	}); err != nil {
+		t.Fatalf("AdoptOrphanOnboardingKickoff: %v", err)
+	}
+	batch, err := q.ListChatInputMessages(ctx, util.MustParseUUID(nextTaskID))
+	if err != nil {
+		t.Fatalf("ListChatInputMessages: %v", err)
+	}
+	if len(batch) != 1 || batch[0].MessageKind != protocol.ChatMessageKindOnboardingKickoff {
+		t.Fatalf("the retry-after-failure turn did not pick the kickoff back up: %+v", batch)
+	}
+}
