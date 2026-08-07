@@ -64,7 +64,11 @@ import { useT } from "../../i18n";
 export type SaveViewScope =
   | { kind: "workspace"; actorKind?: "all" | "members" | "agents" }
   | { kind: "my"; variant: "any" | "assigned" | "created" | "involved" }
-  | { kind: "project"; projectId: string };
+  | {
+      kind: "project";
+      projectId: string;
+      actorKind?: "all" | "members" | "agents";
+    };
 
 const WORKSPACE_VARIANTS = ["all", "members", "agents"] as const;
 const MY_VARIANTS = ["any", "assigned", "created", "involved"] as const;
@@ -466,7 +470,7 @@ export function SaveViewDialog({
     setName(editView?.name ?? "");
     setNameError(false);
     setVisibility(editView?.visibility === "workspace" ? "workspace" : "private");
-    if (scope.kind === "workspace") {
+    if (scope.kind === "workspace" || scope.kind === "project") {
       const fromEdit = editView?.scope_variant;
       setVariant(
         fromEdit === "members" || fromEdit === "agents"
@@ -509,7 +513,11 @@ export function SaveViewDialog({
                 : scope.variant
             ]
           ])
-        : t(($) => $.save_view.hint_project, { title: projectTitle });
+        : variant === "members"
+          ? t(($) => $.save_view.hint_project_members, { title: projectTitle })
+          : variant === "agents"
+            ? t(($) => $.save_view.hint_project_agents, { title: projectTitle })
+            : t(($) => $.save_view.hint_project, { title: projectTitle });
 
   const create = () => {
     if (!draftStore) return;
@@ -529,7 +537,7 @@ export function SaveViewDialog({
           ? ((MY_VARIANTS as readonly string[]).includes(variant)
               ? (variant as CreateIssueViewRequest["scope_variant"])
               : scope.variant)
-          : scope.kind === "workspace" && (variant === "members" || variant === "agents")
+          : variant === "members" || variant === "agents"
             ? variant
             : null,
       definition_version: 1,
@@ -691,15 +699,16 @@ export function SaveViewDialog({
             </p>
           )}
 
-          {scope.kind !== "project" && (
-            <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3">
               <Label className={ROW_LABEL}>
-                {t(($) => $.save_view.scope_label)}
+                {scope.kind === "my"
+                  ? t(($) => $.save_view.scope_label_my)
+                  : t(($) => $.save_view.scope_label_workspace)}
               </Label>
               <Select
-                items={(scope.kind === "workspace"
-                  ? WORKSPACE_VARIANTS
-                  : MY_VARIANTS
+                items={(scope.kind === "my"
+                  ? MY_VARIANTS
+                  : WORKSPACE_VARIANTS
                 ).map((v) => ({
                   value: v as string,
                   label: t(($) => $.save_view[VARIANT_LABEL_KEY[v]]),
@@ -709,14 +718,18 @@ export function SaveViewDialog({
                   if (v) setVariant(v as ScopeVariantValue);
                 }}
               >
-                <SelectTrigger size="sm" className="w-64" aria-label={t(($) => $.save_view.scope_label)}>
+                <SelectTrigger size="sm" className="w-64" aria-label={
+                    scope.kind === "my"
+                      ? t(($) => $.save_view.scope_label_my)
+                      : t(($) => $.save_view.scope_label_workspace)
+                  }>
                   <SelectValue>
                     {t(($) => $.save_view[VARIANT_LABEL_KEY[variant]])}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent align="start">
                   <SelectGroup>
-                    {(scope.kind === "workspace" ? WORKSPACE_VARIANTS : MY_VARIANTS).map((v) => (
+                    {(scope.kind === "my" ? MY_VARIANTS : WORKSPACE_VARIANTS).map((v) => (
                       <SelectItem key={v} value={v}>
                         {t(($) => $.save_view[VARIANT_LABEL_KEY[v]])}
                       </SelectItem>
@@ -725,7 +738,6 @@ export function SaveViewDialog({
                 </SelectContent>
               </Select>
             </div>
-          )}
 
           {draftStore && (
             <ViewStoreProvider store={draftStore}>

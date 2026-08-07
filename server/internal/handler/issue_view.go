@@ -29,8 +29,8 @@ var (
 
 // validateIssueViewVariant returns the pgtype value for a scope_variant
 // input under the given scope_type, or ok=false when the pairing is
-// invalid. Workspace variants are optional (NULL = the unrestricted All
-// tab); my variants are required; project views carry none.
+// invalid. Workspace and project variants are optional assignee-type
+// narrowing (NULL = the unrestricted All tab); my variants are required.
 func validateIssueViewVariant(scopeType string, variant *string) (pgtype.Text, bool) {
 	switch scopeType {
 	case "my":
@@ -38,7 +38,7 @@ func validateIssueViewVariant(scopeType string, variant *string) (pgtype.Text, b
 			return pgtype.Text{}, false
 		}
 		return pgtype.Text{String: *variant, Valid: true}, true
-	case "workspace":
+	default: // workspace, project
 		if variant == nil || *variant == "" || *variant == "all" {
 			return pgtype.Text{}, true
 		}
@@ -46,11 +46,6 @@ func validateIssueViewVariant(scopeType string, variant *string) (pgtype.Text, b
 			return pgtype.Text{}, false
 		}
 		return pgtype.Text{String: *variant, Valid: true}, true
-	default: // project
-		if variant != nil && *variant != "" {
-			return pgtype.Text{}, false
-		}
-		return pgtype.Text{}, true
 	}
 }
 

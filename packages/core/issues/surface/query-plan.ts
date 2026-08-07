@@ -116,7 +116,15 @@ export function buildIssueSurfaceQueryPlan(
       };
     }
     case "project": {
-      const queryFilter = { project_id: scope.projectId };
+      // Same per-tab narrowing as the workspace scope: the project pages
+      // carry the same Members/Agents tabs, and assignee_types composes
+      // with project_id on the list and grouped endpoints.
+      const queryFilter: MyIssuesFilter =
+        scope.actorKind === "members"
+          ? { project_id: scope.projectId, assignee_types: ["member"] }
+          : scope.actorKind === "agents"
+            ? { project_id: scope.projectId, assignee_types: ["agent", "squad"] }
+            : { project_id: scope.projectId };
       return {
         kind: "scoped",
         scopeKey,

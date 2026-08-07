@@ -265,3 +265,67 @@ func TestWorkspaceIssueViewVariant(t *testing.T) {
 		t.Fatalf("variant switch lost: %+v", updated.ScopeVariant)
 	}
 }
+
+func TestProjectIssueViewVariant(t *testing.T) {
+	enableIssueViews(t)
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "variant project",
+	})
+	testHandler.CreateProject(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create project: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var project ProjectResponse
+	if err := json.NewDecoder(w.Body).Decode(&project); err != nil {
+		t.Fatalf("decode CreateProject: %v", err)
+	}
+	t.Cleanup(func() {
+		req := newRequest("DELETE", "/api/projects/"+project.ID, nil)
+		req = withURLParam(req, "id", project.ID)
+		testHandler.DeleteProject(httptest.NewRecorder(), req)
+	})
+
+	// Save from the project page's Members tab: variant persists.
+	view, code, body := createIssueViewForTest(t, map[string]any{
+		"name":          "Member work",
+		"scope_type":    "project",
+		"scope_id":      project.ID,
+		"scope_variant": "members",
+		"query":         map[string]any{},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", code, body)
+	}
+	if view.ScopeVariant == nil || *view.ScopeVariant != "members" {
+		t.Fatalf("project variant not persisted: %+v", view.ScopeVariant)
+	}
+
+	// "all" normalizes to NULL, same as workspace views.
+	view2, code, body := createIssueViewForTest(t, map[string]any{
+		"name":          "Whole project",
+		"scope_type":    "project",
+		"scope_id":      project.ID,
+		"scope_variant": "all",
+		"query":         map[string]any{},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", code, body)
+	}
+	if view2.ScopeVariant != nil {
+		t.Fatalf("'all' must normalize to NULL, got %v", *view2.ScopeVariant)
+	}
+
+	// My-only variants are rejected on project views.
+	_, code, _ = createIssueViewForTest(t, map[string]any{
+		"name":          "Bad variant",
+		"scope_type":    "project",
+		"scope_id":      project.ID,
+		"scope_variant": "involved",
+		"query":         map[string]any{},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for my-variant on project view, got %d", code)
+	}
+}

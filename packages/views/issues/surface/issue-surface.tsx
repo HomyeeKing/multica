@@ -99,7 +99,7 @@ export function IssueSurface({
   // scope_variant applies (saved from the tab, switchable in the edit
   // dialog); a variant-free view resolves to the unrestricted "all".
   const effectiveScope: IssueScope =
-    activeView && scope.type === "workspace"
+    activeView && (scope.type === "workspace" || scope.type === "project")
       ? {
           ...scope,
           actorKind:
@@ -265,9 +265,13 @@ function IssueSurfaceContent({
             onTableFacetChange={controller.setActiveTableFacet}
             saveViewScope={
               scope.type === "project"
-                ? { kind: "project", projectId: scope.projectId }
+                ? {
+                    kind: "project",
+                    projectId: scope.projectId,
+                    actorKind: scope.actorKind,
+                  }
                 : scope.type === "workspace"
-                  ? { kind: "workspace" }
+                  ? { kind: "workspace", actorKind: scope.actorKind }
                   : null
             }
           />
