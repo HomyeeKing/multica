@@ -1943,6 +1943,12 @@ export const InboxGroupSchema = z
     severity: z.string(),
     title: z.string(),
     body: z.string().nullish(),
+    actor_type: z.string().nullish(),
+    actor_id: z.string().nullish(),
+    // Values are typed loosely here and narrowed to strings when projected:
+    // the mobile schema requires an all-strings map, and a value that is not
+    // one must be dropped rather than take the whole response down with it.
+    details: z.record(z.string(), z.unknown()).nullish(),
     issue_id: z.string().nullish(),
     issue_status: z.string().nullish(),
     created_at: z.string(),

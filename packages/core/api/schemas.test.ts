@@ -1392,7 +1392,7 @@ describe("InboxGroupPageSchema", () => {
       ENDPOINT,
     );
     expect(parsed.items).toHaveLength(1);
-    expect(parsed.items[0].target_kind).toBeNull();
+    expect(parsed.items[0]?.target_kind).toBeNull();
   });
 });
 
