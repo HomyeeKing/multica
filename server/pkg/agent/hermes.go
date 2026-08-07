@@ -2075,23 +2075,47 @@ type acpMcpTransportCapabilities struct {
 //
 // Per ACP v1 capability negotiation, "Clients and Agents MUST treat all
 // capabilities omitted in the initialize request as UNSUPPORTED", and
-// `http` / `sse` have no default beyond false. So an omitted block, an
-// explicit null, a block whose fields have the wrong types, and an
-// unreadable response all resolve to "neither transport supported".
+// `http` / `sse` have no default beyond false. Every state therefore
+// resolves to "neither transport supported"; the classification only
+// decides whether the omitted-capabilities exception may apply.
+//
+// Each level is decoded as raw JSON rather than straight into the target
+// struct, because encoding/json leaves a non-pointer destination untouched
+// and reports no error when it decodes `null`. A single Unmarshal would
+// therefore read `null`, `{"agentCapabilities":null}` and a genuinely
+// silent response as the same thing, letting an unreadable response take
+// the exception. ACP's InitializeResponse is an object and
+// `agentCapabilities` is not nullable, so those two are malformed, not
+// silent.
 //
 // See https://agentclientprotocol.com/protocol/v1/initialization#capabilities
+// and https://pkg.go.dev/encoding/json#Unmarshal for the null rule.
 func extractACPMcpCapabilities(result json.RawMessage) acpMcpTransportCapabilities {
-	var r struct {
-		AgentCapabilities struct {
-			McpCapabilities json.RawMessage `json:"mcpCapabilities"`
-		} `json:"agentCapabilities"`
+	invalid := acpMcpTransportCapabilities{Declaration: acpMcpCapabilitiesInvalid}
+	omitted := acpMcpTransportCapabilities{Declaration: acpMcpCapabilitiesOmitted}
+
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(result, &top); err != nil || top == nil {
+		return invalid
 	}
-	if err := json.Unmarshal(result, &r); err != nil {
-		return acpMcpTransportCapabilities{Declaration: acpMcpCapabilitiesInvalid}
+	rawAgentCaps, ok := top["agentCapabilities"]
+	if !ok {
+		// A well-formed response that declares no capabilities at all.
+		return omitted
 	}
-	raw := bytes.TrimSpace(r.AgentCapabilities.McpCapabilities)
-	if len(raw) == 0 {
-		return acpMcpTransportCapabilities{Declaration: acpMcpCapabilitiesOmitted}
+	var agentCaps map[string]json.RawMessage
+	if err := json.Unmarshal(rawAgentCaps, &agentCaps); err != nil || agentCaps == nil {
+		return invalid
+	}
+	rawMcp, ok := agentCaps["mcpCapabilities"]
+	if !ok {
+		// The real hermes 0.18.2 shape: capabilities declared, this block
+		// genuinely absent. Only this state can reach the exception.
+		return omitted
+	}
+	rawMcp = bytes.TrimSpace(rawMcp)
+	if bytes.Equal(rawMcp, []byte("null")) {
+		return invalid
 	}
 	var caps struct {
 		HTTP bool `json:"http"`
@@ -2100,8 +2124,8 @@ func extractACPMcpCapabilities(result json.RawMessage) acpMcpTransportCapabiliti
 	// A malformed block (wrong field types, non-object) is unusable. An
 	// unusable declaration is not silence, so it must not reach the
 	// omitted-capabilities exception — it fails closed instead.
-	if err := json.Unmarshal(raw, &caps); err != nil {
-		return acpMcpTransportCapabilities{Declaration: acpMcpCapabilitiesInvalid}
+	if err := json.Unmarshal(rawMcp, &caps); err != nil {
+		return invalid
 	}
 	return acpMcpTransportCapabilities{
 		Declaration: acpMcpCapabilitiesDeclared,

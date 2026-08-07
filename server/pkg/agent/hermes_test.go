@@ -2856,10 +2856,43 @@ func TestExtractACPMcpCapabilities(t *testing.T) {
 		},
 		{
 			// An explicit null is not silence and must not reach the
-			// omitted-capabilities exception; it resolves to unsupported.
+			// omitted-capabilities exception.
 			name:     "explicit null block",
 			raw:      `{"agentCapabilities":{"mcpCapabilities":null}}`,
-			want:     acpMcpCapabilitiesDeclared,
+			want:     acpMcpCapabilitiesInvalid,
+			wantHTTP: false,
+			wantSSE:  false,
+		},
+		{
+			// encoding/json decodes `null` into a non-pointer destination
+			// without touching it and without erroring, so these two used to
+			// be indistinguishable from a genuinely silent response and took
+			// the exception. ACP's InitializeResponse is an object and
+			// agentCapabilities is not nullable — both are malformed.
+			name:     "whole result is null",
+			raw:      `null`,
+			want:     acpMcpCapabilitiesInvalid,
+			wantHTTP: false,
+			wantSSE:  false,
+		},
+		{
+			name:     "agentCapabilities is null",
+			raw:      `{"protocolVersion":1,"agentCapabilities":null}`,
+			want:     acpMcpCapabilitiesInvalid,
+			wantHTTP: false,
+			wantSSE:  false,
+		},
+		{
+			name:     "agentCapabilities is not an object",
+			raw:      `{"agentCapabilities":[]}`,
+			want:     acpMcpCapabilitiesInvalid,
+			wantHTTP: false,
+			wantSSE:  false,
+		},
+		{
+			name:     "whole result is an array",
+			raw:      `[]`,
+			want:     acpMcpCapabilitiesInvalid,
 			wantHTTP: false,
 			wantSSE:  false,
 		},
@@ -2994,6 +3027,14 @@ func TestFilterACPMcpServersByCapabilityInvalidNeverTakesTheException(t *testing
 		`{"agentCapabilities":{"mcpCapabilities":{"sse":1}}}`,
 		`{"agentCapabilities":{"mcpCapabilities":"http"}}`,
 		`{"agentCapabilities":{"mcpCapabilities":[]}}`,
+		`{"agentCapabilities":{"mcpCapabilities":null}}`,
+		// The null-decoding shapes: encoding/json accepts these silently,
+		// so only explicit per-level validation keeps them out of the
+		// exception.
+		`null`,
+		`{"protocolVersion":1,"agentCapabilities":null}`,
+		`{"agentCapabilities":[]}`,
+		`[]`,
 		`not json`,
 	} {
 		caps := extractACPMcpCapabilities(json.RawMessage(raw))
