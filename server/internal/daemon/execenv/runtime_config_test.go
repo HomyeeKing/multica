@@ -240,7 +240,7 @@ func TestPerRunCommentContextStaysOutOfBrief(t *testing.T) {
 	for _, want := range []string{
 		"4 new comment(s) on this issue since your last run",
 		"blindly",
-		"--thread thread-abc --since " + since + " --output json",
+		"--thread thread-abc --since " + since + " --compact --output json",
 		"--tail 30",
 	} {
 		if !strings.Contains(hint, want) {
@@ -258,7 +258,7 @@ func TestColdCommentsHintPointsAtTriggeringThread(t *testing.T) {
 	if strings.Contains(hint, "new comment(s) since your last run") {
 		t.Errorf("no since-delta hint should render on cold start, got:\n%s", hint)
 	}
-	if !strings.Contains(hint, "multica issue comment list "+issueID+" --thread thread-root-1 --tail 30 --output json") {
+	if !strings.Contains(hint, "multica issue comment list "+issueID+" --thread thread-root-1 --tail 30 --compact --output json") {
 		t.Errorf("cold start must point at the triggering thread read, got:\n%s", hint)
 	}
 	if strings.Contains(buildMetaSkillContent("claude", TaskContextForEnv{IssueID: issueID, TriggerCommentID: "trigger-1", TriggerThreadID: "thread-root-1"}), "thread-root-1") {
@@ -277,7 +277,7 @@ func TestResumedCommentsHintSkipsDefaultThreadRead(t *testing.T) {
 		"No other new comments on this issue since your last run",
 		"If your reply depends on thread context",
 		"do not rely only on resumed session memory",
-		"multica issue comment list " + issueID + " --thread thread-root-1 --tail 30 --output json",
+		"multica issue comment list " + issueID + " --thread thread-root-1 --tail 30 --compact --output json",
 	} {
 		if !strings.Contains(hint, want) {
 			t.Errorf("resumed/no-delta hint missing %q\n--- output ---\n%s", want, hint)

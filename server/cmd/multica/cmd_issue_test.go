@@ -3449,9 +3449,67 @@ func TestIssueCommentListHelpCarriesReadContract(t *testing.T) {
 		// Pagination cursor labels, exactly as the CLI prints them on stderr.
 		"Next thread cursor",
 		"Next reply cursor",
+		// The --compact contract (#5999 follow-up): what goes and what is
+		// untouchable.
+		"drop response fields that carry no information",
+		"Content and identity fields pass through untouched",
 	} {
 		if !strings.Contains(help, want) {
 			t.Errorf("comment list rendered help missing %q, got:\n%s", want, help)
 		}
+	}
+}
+
+// TestCompactCommentsDropsReaderNoise pins the --compact contract (#5999
+// follow-up, MUL-5442): reader-noise fields go — the echoed issue_id,
+// source_task_id, updated_at when identical to created_at, null values,
+// empty arrays — while information-carrying fields and content pass
+// through untouched, and a REAL edit timestamp or non-empty array is
+// never dropped.
+func TestCompactCommentsDropsReaderNoise(t *testing.T) {
+	t.Parallel()
+
+	comments := []map[string]any{{
+		"id":               "c-1",
+		"issue_id":         "i-1",
+		"parent_id":        nil,
+		"author_type":      "agent",
+		"author_id":        "a-1",
+		"content":          "hello",
+		"type":             "comment",
+		"created_at":       "2026-08-07T02:00:00Z",
+		"updated_at":       "2026-08-07T02:00:00Z",
+		"source_task_id":   "t-1",
+		"resolved_at":      nil,
+		"resolved_by_id":   nil,
+		"attachments":      []any{},
+		"reactions":        []any{},
+		"reply_count":      float64(3),
+		"last_activity_at": "2026-08-07T03:00:00Z",
+	}, {
+		"id":          "c-2",
+		"issue_id":    "i-1",
+		"content":     "edited later",
+		"created_at":  "2026-08-07T02:00:00Z",
+		"updated_at":  "2026-08-07T04:00:00Z",
+		"attachments": []any{map[string]any{"id": "att-1"}},
+	}}
+	compactComments(comments)
+
+	for _, k := range []string{"issue_id", "source_task_id", "updated_at", "parent_id", "resolved_at", "resolved_by_id", "attachments", "reactions"} {
+		if _, ok := comments[0][k]; ok {
+			t.Errorf("compact kept reader-noise field %q", k)
+		}
+	}
+	for _, k := range []string{"id", "author_type", "author_id", "content", "type", "created_at", "reply_count", "last_activity_at"} {
+		if _, ok := comments[0][k]; !ok {
+			t.Errorf("compact dropped information field %q", k)
+		}
+	}
+	if _, ok := comments[1]["updated_at"]; !ok {
+		t.Error("compact dropped a real edit timestamp (updated_at != created_at)")
+	}
+	if _, ok := comments[1]["attachments"]; !ok {
+		t.Error("compact dropped a non-empty attachments array")
 	}
 }
