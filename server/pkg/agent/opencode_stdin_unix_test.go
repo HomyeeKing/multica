@@ -212,6 +212,50 @@ func TestOpencodeExecuteIgnoresBenignPromptWriteEPIPE(t *testing.T) {
 	}
 }
 
+// TestOpencodeExecuteFailsWhenPromptWriteBreaksAndStreamNeverStarted is the
+// counterpart to the test above and guards the false-success it could
+// otherwise create. processEvents starts at "completed" and only fails closed
+// on structural evidence (an open step, or a step awaiting a continuation), so
+// a child that emits NOTHING and exits 0 leaves that default untouched. If the
+// prompt write also broke, suppressing it on the strength of that default
+// would report a clean, empty success for a run whose prompt never landed.
+//
+// Suppression must therefore key on a positive terminal signal, not on the
+// absence of a negative one.
+func TestOpencodeExecuteFailsWhenPromptWriteBreaksAndStreamNeverStarted(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Emits no events at all and exits 0 without reading stdin.
+	fakePath := filepath.Join(dir, "opencode")
+	writeTestExecutable(t, fakePath, []byte("#!/bin/sh\nexit 0\n"))
+
+	// Large enough that the write cannot complete before the child exits.
+	prompt := strings.Repeat("undelivered prompt payload 0123456789\n", 36_000)
+
+	backend, err := New("opencode", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("New(opencode): %v", err)
+	}
+	session, err := backend.Execute(t.Context(), prompt, ExecOptions{Timeout: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+	result := <-session.Result
+
+	if result.Status == "completed" {
+		t.Fatalf("undelivered prompt reported as success: status=%q output=%q error=%q",
+			result.Status, result.Output, result.Error)
+	}
+	if !strings.Contains(result.Error, "prompt write failed") {
+		t.Errorf("error = %q, want it to name the failed prompt write", result.Error)
+	}
+}
+
 // TestOpencodeExecuteCancelReleasesBlockedPromptWriter covers the cancellation
 // half of the stdin contract: a child that never reads stdin leaves the prompt
 // writer blocked on a full pipe. Cancelling must close stdin so that goroutine

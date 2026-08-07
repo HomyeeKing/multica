@@ -273,19 +273,25 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 			// the process exit detail so a mid-step crash still surfaces the
 			// signal / exit code that killed it.
 			scanResult.errMsg = fmt.Sprintf("%s; opencode exited with error: %v", scanResult.errMsg, exitErr)
-		} else if writeErr != nil && scanResult.status != "completed" {
-			// A prompt write can only explain a run that did NOT complete.
-			// OpenCode reads stdin to EOF before it does any work, so a run that
-			// produced a complete stream necessarily received the whole prompt —
-			// an EPIPE recorded after that just means it closed the pipe on its
-			// way out, and failing an otherwise good run on it would discard a
-			// successful result. Append rather than overwrite so the stream's own
-			// diagnosis survives.
+		} else if writeErr != nil && !scanResult.sawTerminalSignal {
+			// A failed prompt write is only benign once the run is PROVEN to have
+			// finished: OpenCode reads stdin to EOF before it does any work, so a
+			// run that reached a terminal signal necessarily received the whole
+			// prompt, and an EPIPE recorded after that just means the pipe closed
+			// on its way out — failing on it would discard a successful result.
+			//
+			// Absence of failure is not that proof. status starts at "completed"
+			// and processEvents only fails closed on structural evidence, so a
+			// child that emits nothing and exits 0 still reports "completed". If
+			// the prompt never landed, that is precisely the run we must not pass
+			// off as a clean success, so key on sawTerminalSignal instead.
+			// Append rather than overwrite so the stream's own diagnosis survives.
 			if scanResult.errMsg == "" {
 				scanResult.errMsg = fmt.Sprintf("opencode prompt write failed: %v", writeErr)
 			} else {
 				scanResult.errMsg = fmt.Sprintf("%s; opencode prompt write failed: %v", scanResult.errMsg, writeErr)
 			}
+			scanResult.status = "failed"
 		}
 
 		b.cfg.Logger.Info("opencode finished", "pid", cmd.Process.Pid, "status", scanResult.status, "duration", duration.Round(time.Millisecond).String())
@@ -325,6 +331,14 @@ type eventResult struct {
 	sessionID        string
 	usage            TokenUsage // accumulated token usage across all steps
 	noTerminalSignal bool       // guard fired: stream reached EOF before a step or required continuation completed
+	// sawTerminalSignal is positive evidence that the run actually finished: a
+	// step_finish closed the last step with no continuation pending. It is NOT
+	// the negation of noTerminalSignal — a stream with no events at all sets
+	// neither, because there is nothing to fail closed on and nothing that
+	// proves completion either. Callers that need "this run really completed"
+	// must test this field; status defaults to "completed" and cannot carry
+	// that meaning on its own.
+	sawTerminalSignal bool
 }
 
 // processEvents reads JSON lines from r, dispatches events to ch, and returns
@@ -355,6 +369,7 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 	openStep := false                // between a step_start and its step_finish
 	stepHasContinuationTool := false // current step has a local tool result OpenCode must feed back
 	awaitingContinuation := false    // the last step_finish still required another step
+	sawStepFinish := false           // at least one step closed; see eventResult.sawTerminalSignal
 
 	scanner := newAgentStreamScanner(r)
 
@@ -390,6 +405,7 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 			trySend(ch, Message{Type: MessageStatus, Status: "running"})
 		case "step_finish":
 			openStep = false
+			sawStepFinish = true
 			awaitingContinuation = event.Part.Reason == "tool-calls" ||
 				(event.Part.Reason != "" && stepHasContinuationTool)
 			stepHasContinuationTool = false
@@ -432,12 +448,13 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 	}
 
 	return eventResult{
-		status:           finalStatus,
-		errMsg:           finalError,
-		output:           output.String(),
-		sessionID:        sessionID,
-		usage:            usage,
-		noTerminalSignal: noTerminalSignal,
+		status:            finalStatus,
+		errMsg:            finalError,
+		output:            output.String(),
+		sessionID:         sessionID,
+		usage:             usage,
+		noTerminalSignal:  noTerminalSignal,
+		sawTerminalSignal: sawStepFinish && !noTerminalSignal,
 	}
 }
 
