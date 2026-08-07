@@ -290,6 +290,12 @@ func TestTaskFailureClassifiers(t *testing.T) {
 // and max_attempts never applies — which is exactly where these three errors
 // used to land (process_failure for the two "terminal signal" variants, via
 // the word "signal", and unknown for the empty-step one).
+//
+// The second trap, one layer out: FailTask only classifies when the daemon sent
+// no reason. An installed daemon predating the rule-7 entry sends a non-empty
+// one, so the fix reaches it through NormalizeDaemonReason or not at all — the
+// installed-daemon cadence problem that shim exists for. Hence the matrix below
+// walks both wire shapes, not just the current-daemon one.
 func TestOpencodeStreamEndedFailureRetries(t *testing.T) {
 	guardErrors := []struct {
 		name   string
@@ -308,29 +314,68 @@ func TestOpencodeStreamEndedFailureRetries(t *testing.T) {
 		}
 	}
 
-	for _, tc := range guardErrors {
-		t.Run(tc.name, func(t *testing.T) {
-			reason := taskfailure.Classify(tc.errMsg).String()
-			if reason != string(taskfailure.ReasonAgentProviderNetwork) {
-				t.Fatalf("Classify(%q) = %q, want %q", tc.errMsg, reason, taskfailure.ReasonAgentProviderNetwork)
-			}
-			// Resume-safe, so the retry child inherits the session and
-			// continues rather than redoing the work already paid for.
-			if resumeUnsafeFailureReason(reason) {
-				t.Errorf("resumeUnsafeFailureReason(%q) = true, want false", reason)
-			}
-			// With an attempt left, the failure produces a retry task.
-			if !retryEligible(reason, mkTask(1, 2)) {
-				t.Errorf("retryEligible(%q, attempt=1/max=2) = false, want true", reason)
-			}
-			// And still terminates once the ceiling is reached, so a
-			// deterministically broken provider cannot loop forever.
-			if retryEligible(reason, mkTask(providerNetworkMaxAttempts, 2)) {
-				t.Errorf("retryEligible(%q, attempt=%d/max=2) = true, want false at the ceiling",
-					reason, providerNetworkMaxAttempts)
-			}
-		})
+	// The reason a daemon puts on the wire. "" is a current daemon, which sends
+	// nothing and lets the server classify. The rest are what an installed
+	// daemon predating rule 7 reports: a NON-EMPTY reason, which skips
+	// FailTask's classify-when-empty branch entirely and only NormalizeDaemonReason
+	// can still fix. Testing Classify alone would miss that boundary — and did.
+	daemonReasons := []struct {
+		name     string
+		reported string
+	}{
+		{"current daemon (server classifies)", ""},
+		{"legacy daemon reporting process_failure", string(taskfailure.ReasonAgentProcessFailure)},
+		{"legacy daemon reporting unknown", string(taskfailure.ReasonAgentUnknown)},
+		{"pre-MUL-1949 daemon reporting coarse agent_error", "agent_error"},
 	}
+
+	// resolveFailureReason mirrors the two steps FailTask runs in order before
+	// it decides retry eligibility.
+	resolveFailureReason := func(reported, errMsg string) string {
+		if reported == "" {
+			reported = taskfailure.Classify(errMsg).String()
+		}
+		return taskfailure.NormalizeDaemonReason(reported, errMsg).String()
+	}
+
+	for _, tc := range guardErrors {
+		for _, dr := range daemonReasons {
+			t.Run(tc.name+"/"+dr.name, func(t *testing.T) {
+				reason := resolveFailureReason(dr.reported, tc.errMsg)
+				if reason != string(taskfailure.ReasonAgentProviderNetwork) {
+					t.Fatalf("resolveFailureReason(%q, %q) = %q, want %q",
+						dr.reported, tc.errMsg, reason, taskfailure.ReasonAgentProviderNetwork)
+				}
+				// Resume-safe, so the retry child inherits the session and
+				// continues rather than redoing the work already paid for.
+				if resumeUnsafeFailureReason(reason) {
+					t.Errorf("resumeUnsafeFailureReason(%q) = true, want false", reason)
+				}
+				// With an attempt left, the failure produces a retry task.
+				if !retryEligible(reason, mkTask(1, 2)) {
+					t.Errorf("retryEligible(%q, attempt=1/max=2) = false, want true", reason)
+				}
+				// And still terminates once the ceiling is reached, so a
+				// deterministically broken provider cannot loop forever.
+				if retryEligible(reason, mkTask(providerNetworkMaxAttempts, 2)) {
+					t.Errorf("retryEligible(%q, attempt=%d/max=2) = true, want false at the ceiling",
+						reason, providerNetworkMaxAttempts)
+				}
+			})
+		}
+	}
+
+	// The prefix is what identifies the guard's own message. An unrelated
+	// failure that merely mentions opencode must keep the daemon's label —
+	// upgrading on a loose substring would relabel real crashes as transient
+	// stream cuts and retry them.
+	t.Run("unrelated opencode failure keeps its reason", func(t *testing.T) {
+		const crash = "opencode exited with error: exit status 2 (opencode stream ended is not why)"
+		got := taskfailure.NormalizeDaemonReason(string(taskfailure.ReasonAgentProcessFailure), crash).String()
+		if got != string(taskfailure.ReasonAgentProcessFailure) {
+			t.Errorf("NormalizeDaemonReason(process_failure, %q) = %q, want it left alone", crash, got)
+		}
+	})
 }
 
 // TestSkillBundleFailureFromLegacyDaemonRetries is the mixed-version
