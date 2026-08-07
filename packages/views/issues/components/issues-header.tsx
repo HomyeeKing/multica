@@ -112,6 +112,7 @@ import {
   type IssuesScope,
   type IssuesScopePageKey,
 } from "@multica/core/issues/stores/issues-scope-store";
+import { actorKindForViewVariant } from "@multica/core/issues/surface/scope";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -948,6 +949,31 @@ export function IssuesHeader({
     (next: IssuesScope) => setScopeForPage(scopePage, next),
     [setScopeForPage, scopePage],
   );
+  // The save dialog's default variant: while a saved view is open the view's
+  // own variant wins (the rows on screen ARE that variant — a copy must not
+  // silently widen to the page tab); otherwise the page tab applies. Memoized
+  // on primitives: the dialog resets its draft when this prop's identity
+  // changes, so a fresh object per header render would wipe a half-typed
+  // name on any background refetch.
+  const dialogActorKind = activeView
+    ? actorKindForViewVariant(activeView.scope_variant)
+    : scope;
+  const dialogProjectId =
+    saveViewScope?.kind === "project" ? saveViewScope.projectId : null;
+  const dialogMyVariant =
+    saveViewScope?.kind === "my" ? saveViewScope.variant : null;
+  const dialogScope = useMemo<SaveViewScope | null>(() => {
+    if (dialogMyVariant) return { kind: "my", variant: dialogMyVariant };
+    if (dialogProjectId)
+      return {
+        kind: "project",
+        projectId: dialogProjectId,
+        actorKind: dialogActorKind,
+      };
+    if (saveViewScope) return { kind: "workspace", actorKind: dialogActorKind };
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- identity keyed on the primitive projections
+  }, [dialogMyVariant, dialogProjectId, dialogActorKind, !!saveViewScope]);
   // Bind the workspace agents-working chip to the active view store so
   // shared IssuesHeader consumers (/issues and project detail) toggle the
   // same filter state as the rest of the display controls. /my-issues keeps
@@ -1104,15 +1130,11 @@ export function IssuesHeader({
           : undefined
       }
     />
-    {savedViewsEnabled && saveViewScope && (
+    {savedViewsEnabled && dialogScope && (
       <SaveViewDialog
         open={saveViewOpen}
         onOpenChange={setSaveViewOpen}
-        scope={
-          saveViewScope.kind === "my"
-            ? saveViewScope
-            : { ...saveViewScope, actorKind: scope }
-        }
+        scope={dialogScope}
         editView={editTarget?.view ?? null}
         seedFromDefinition={editTarget?.fromDefinition ?? false}
       />

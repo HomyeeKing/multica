@@ -388,6 +388,38 @@ describe("projectGanttIssuesOptions", () => {
     const options = projectGanttIssuesOptions(WS_ID, PROJECT_ID);
     expect(options.queryKey).toEqual(issueKeys.projectGantt(WS_ID, PROJECT_ID));
   });
+
+  it("threads the assignee-type tab into the request and the cache key", async () => {
+    const listIssues = vi
+      .fn<(params?: ListIssuesParams) => Promise<ListIssuesResponse>>()
+      .mockResolvedValue({ issues: [makeIssue(1)], total: 1 });
+    installFakeApi(listIssues);
+
+    const agentsTab = projectGanttIssuesOptions(WS_ID, PROJECT_ID, [
+      "agent",
+      "squad",
+    ]);
+    await qc.fetchQuery(agentsTab);
+
+    expect(listIssues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: PROJECT_ID,
+        scheduled: true,
+        assignee_types: ["agent", "squad"],
+      }),
+    );
+    // Distinct tabs must not share a cache entry.
+    expect(agentsTab.queryKey).not.toEqual(
+      projectGanttIssuesOptions(WS_ID, PROJECT_ID).queryKey,
+    );
+    // The unrestricted tab never sends the param.
+    const unrestricted = vi
+      .fn<(params?: ListIssuesParams) => Promise<ListIssuesResponse>>()
+      .mockResolvedValue({ issues: [], total: 0 });
+    installFakeApi(unrestricted);
+    await qc.fetchQuery(projectGanttIssuesOptions(WS_ID, PROJECT_ID));
+    expect(unrestricted.mock.calls[0]![0]).not.toHaveProperty("assignee_types");
+  });
 });
 
 describe("childrenByParentsOptions chunking", () => {

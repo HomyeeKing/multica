@@ -703,7 +703,6 @@ const ServerPaginatedBoardColumn = memo(function ServerPaginatedBoardColumn({
 });
 
 
-
 function BoardHiddenColumnsPanel({
   hiddenStatuses,
   statusPagination,

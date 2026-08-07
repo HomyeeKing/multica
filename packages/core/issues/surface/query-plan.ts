@@ -25,6 +25,37 @@ export interface IssueSurfaceQueryPlan {
   createDefaults: Partial<CreateIssueRequest>;
 }
 
+function buildMyRelationPlan(
+  scope: Extract<IssueScope, { type: "my" }>,
+  scopeKey: string,
+): IssueSurfaceQueryPlan {
+  switch (scope.relation) {
+    case "assigned":
+      return {
+        scopeKey,
+        queryFilter: { assignee_id: scope.userId },
+        createDefaults: {
+          assignee_type: "member",
+          assignee_id: scope.userId,
+        },
+      };
+    case "created":
+      return {
+        scopeKey,
+        queryFilter: { creator_id: scope.userId },
+        createDefaults: {},
+      };
+    case "involved":
+      return {
+        scopeKey,
+        queryFilter: { involves_user_id: scope.userId },
+        createDefaults: {},
+      };
+    case "all":
+      return { scopeKey, queryFilter: {}, createDefaults: {} };
+  }
+}
+
 export function buildIssueSurfaceQueryPlan(
   scope: IssueScope,
 ): IssueSurfaceQueryPlan {
@@ -50,32 +81,7 @@ export function buildIssueSurfaceQueryPlan(
       };
     }
     case "my":
-      switch (scope.relation) {
-        case "assigned":
-          return {
-            scopeKey,
-            queryFilter: { assignee_id: scope.userId },
-            createDefaults: {
-              assignee_type: "member",
-              assignee_id: scope.userId,
-            },
-          };
-        case "created":
-          return {
-            scopeKey,
-            queryFilter: { creator_id: scope.userId },
-            createDefaults: {},
-          };
-        case "involved":
-          return {
-            scopeKey,
-            queryFilter: { involves_user_id: scope.userId },
-            createDefaults: {},
-          };
-        case "all":
-          return { scopeKey, queryFilter: {}, createDefaults: {} };
-      }
-      break;
+      return buildMyRelationPlan(scope, scopeKey);
     case "actor":
       return {
         scopeKey,

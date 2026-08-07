@@ -122,27 +122,6 @@ vi.mock("@multica/core/issues/config", () => ({
   },
 }));
 
-// Default mock returns hasMore=false so the load-more sentinels render
-// as no-op divs and don't pull IntersectionObserver into JSDOM.
-const mockLoadMore = vi.fn();
-const useLoadMoreByStatusMock = vi.fn(
-  (_status: string, _opts?: unknown, _sort?: unknown) => ({
-    total: 0,
-    loaded: 0,
-    hasMore: false,
-    isLoading: false,
-    loadMore: mockLoadMore,
-  }),
-);
-vi.mock("@multica/core/issues/mutations", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@multica/core/issues/mutations")>();
-  return {
-    ...actual,
-    useLoadMoreByStatus: (status: string, opts?: unknown, sort?: unknown) =>
-      useLoadMoreByStatusMock(status, opts, sort),
-  };
-});
-
 type SwimlaneGroupingMock = "parent" | "project" | "assignee";
 
 // Mock view store. The lane order and collapsed-lane fields are mutable
@@ -421,13 +400,6 @@ describe("SwimLaneView", () => {
     mockViewState.agentRunningFilter = false;
     mockListChildrenByParents.mockResolvedValue({ issues: [] });
     mockGetAgentTaskSnapshot.mockResolvedValue([]);
-    useLoadMoreByStatusMock.mockImplementation(() => ({
-      total: 0,
-      loaded: 0,
-      hasMore: false,
-      isLoading: false,
-      loadMore: mockLoadMore,
-    }));
   });
 
   it("renders status columns as headers", () => {
