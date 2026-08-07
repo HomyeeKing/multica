@@ -418,3 +418,77 @@ VALUES ($1, 'member', $2, 'new_comment', 'info', 'stale', true, false, $3)`,
 	})
 	return ws
 }
+
+// Lifecycle. inbox_group carries no foreign keys (repo rule), so every parent's
+// disappearance has to remove its groups explicitly — and remove only its own.
+func TestLifecycleCleanupDeletesCleanlyAndDoesNotOverreach(t *testing.T) {
+	f := newFixture(t, true)
+	ctx := context.Background()
+	other := f.addMember(t)
+
+	mine, err := f.w.Deliver(ctx, f.delivery("v1:"+uuid.NewString()), f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs := f.delivery("")
+	theirs.RecipientID = other
+	theirs.DeliveryKey = DeliveryKey(uuidStr(f.ws), uuidStr(other), "new_comment", uuidStr(f.issue), "x")
+	theirsRes, err := f.w.Deliver(ctx, theirs, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A member leaving takes their groups and nobody else's.
+	if err := f.w.PurgeMember(ctx, f.ws, other); err != nil {
+		t.Fatal(err)
+	}
+	if f.groupExists(t, theirsRes.Group.ID) {
+		t.Fatal("the departed member's group survived")
+	}
+	if !f.groupExists(t, mine.Group.ID) {
+		t.Fatal("purging one member removed another member's group")
+	}
+
+	// Deleting the issue takes every group about it.
+	if err := f.w.PurgeIssue(ctx, f.ws, f.issue); err != nil {
+		t.Fatal(err)
+	}
+	if f.groupExists(t, mine.Group.ID) {
+		t.Fatal("a group for a deleted issue survived")
+	}
+}
+
+// Orphan groups — every event deleted out from under them — render as nothing
+// while still occupying a page of results. Nothing else removes them.
+func TestReconcileRemovesOrphanGroups(t *testing.T) {
+	f := newFixture(t, true)
+	ctx := context.Background()
+
+	res, err := f.w.Deliver(ctx, f.delivery("v1:"+uuid.NewString()), f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `DELETE FROM inbox_item WHERE group_id = $1`, res.Group.ID); err != nil {
+		t.Fatal(err)
+	}
+	report, err := f.w.Reconcile(ctx, f.ws, 100, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OrphansRemoved == 0 {
+		t.Fatal("reconcile left an orphan group behind")
+	}
+	if f.groupExists(t, res.Group.ID) {
+		t.Fatal("the orphan group survived reconcile")
+	}
+}
+
+func (f *fixture) groupExists(t *testing.T, id pgtype.UUID) bool {
+	t.Helper()
+	var n int
+	if err := f.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM inbox_group WHERE id = $1`, id).Scan(&n); err != nil {
+		t.Fatalf("count group: %v", err)
+	}
+	return n > 0
+}
