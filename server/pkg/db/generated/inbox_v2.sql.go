@@ -122,16 +122,24 @@ func (q *Queries) AdvanceInboxGroupForItem(ctx context.Context, arg AdvanceInbox
 	return i, err
 }
 
-const claimInboxItemsForGroup = `-- name: ClaimInboxItemsForGroup :execrows
+const claimInboxItemsForSource = `-- name: ClaimInboxItemsForSource :execrows
 WITH numbered AS (
     SELECT id,
-           ROW_NUMBER() OVER (ORDER BY created_at, id) AS seq
+           ROW_NUMBER() OVER (ORDER BY created_at, id) + $2::bigint AS seq
     FROM inbox_item
-    WHERE inbox_item.workspace_id = $2
+    WHERE inbox_item.workspace_id = $3
       AND inbox_item.recipient_type = 'member'
-      AND inbox_item.recipient_id = $3
-      AND inbox_item.issue_id IS NOT DISTINCT FROM $4
+      AND inbox_item.recipient_id = $4
       AND inbox_item.group_id IS NULL
+      AND (
+            -- An issue source claims every unclaimed row for that issue.
+            ($5::text = 'issue' AND inbox_item.issue_id = $6::uuid)
+            -- A standalone source is ONE row, addressed by its own id. Folding
+            -- all of a person's issue-less rows into one group would merge
+            -- unrelated notifications — an autopilot pause and a failed quick
+            -- create have nothing to do with each other.
+         OR ($5::text = 'standalone' AND inbox_item.id = $6::uuid)
+          )
 )
 UPDATE inbox_item i
 SET group_id  = $1,
@@ -140,26 +148,43 @@ FROM numbered
 WHERE i.id = numbered.id
 `
 
-type ClaimInboxItemsForGroupParams struct {
+type ClaimInboxItemsForSourceParams struct {
 	GroupID     pgtype.UUID `json:"group_id"`
+	SeqOffset   int64       `json:"seq_offset"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	RecipientID pgtype.UUID `json:"recipient_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
+	SourceKind  string      `json:"source_kind"`
+	SourceID    pgtype.UUID `json:"source_id"`
 }
 
-// Lazy migration: attach a batch of this person's unclaimed rows to a group and
-// number them.
+// Lazy migration: attach this person's unclaimed rows for one source to a group
+// and number them. Must be called with the group row already locked.
 //
-// Numbering follows (created_at, id) so the sequence a historical row gets
-// matches the order v1 clients already display it in — otherwise the two views
-// would disagree about which row is the representative. id breaks ties because
-// created_at alone is not unique in the legacy data.
-func (q *Queries) ClaimInboxItemsForGroup(ctx context.Context, arg ClaimInboxItemsForGroupParams) (int64, error) {
-	result, err := q.db.Exec(ctx, claimInboxItemsForGroup,
+// @seq_offset is the group's current latest_seq. Numbering continues from there
+// rather than restarting at 1, because a group can already hold events: the
+// write gate opens, a new notification lands on an empty group as event_seq 1,
+// and only afterwards does this person's page load and claim the history. A
+// ROW_NUMBER() that always started at 1 would collide with that row on
+// inbox_item_group_seq_uidx.
+//
+// The delivery path calls this under the group lock BEFORE allocating its own
+// sequence, which is what keeps the offset zero in practice: history is claimed
+// while the group is still empty, so it numbers 1..M in created_at order and the
+// new event takes M+1. That ordering matters beyond tidiness — the legacy
+// endpoints sort by created_at, so if the sequence disagreed with it, v1 and v2
+// would elect different representative rows for the same group.
+//
+// Ordering by (created_at, id): created_at alone is not unique in the legacy
+// data, and an unstable tie-break would make the numbering non-deterministic
+// across a retry.
+func (q *Queries) ClaimInboxItemsForSource(ctx context.Context, arg ClaimInboxItemsForSourceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimInboxItemsForSource,
 		arg.GroupID,
+		arg.SeqOffset,
 		arg.WorkspaceID,
 		arg.RecipientID,
-		arg.IssueID,
+		arg.SourceKind,
+		arg.SourceID,
 	)
 	if err != nil {
 		return 0, err
@@ -183,7 +208,7 @@ func (q *Queries) CountUnclaimedInboxItems(ctx context.Context, recipientID pgty
 }
 
 const findInboxItemByDeliveryKey = `-- name: FindInboxItemByDeliveryKey :one
-SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key FROM inbox_item WHERE delivery_key = $1
+SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key, dismissed_at FROM inbox_item WHERE delivery_key = $1
 `
 
 // Idempotency probe for a new delivery. Only an optimisation: two concurrent
@@ -213,6 +238,7 @@ func (q *Queries) FindInboxItemByDeliveryKey(ctx context.Context, deliveryKey pg
 		&i.TargetKind,
 		&i.TargetID,
 		&i.DeliveryKey,
+		&i.DismissedAt,
 	)
 	return i, err
 }
@@ -256,7 +282,7 @@ func (q *Queries) GetInboxGroupForRecipient(ctx context.Context, arg GetInboxGro
 
 const getInboxV2WriteEnabled = `-- name: GetInboxV2WriteEnabled :one
 
-SELECT write_enabled FROM inbox_v2_cutover WHERE id = true
+SELECT write_enabled FROM inbox_v2_cutover WHERE id = true FOR SHARE
 `
 
 // Inbox v2 (route B): inbox_item keeps its role as the event table and gains
@@ -266,6 +292,14 @@ SELECT write_enabled FROM inbox_v2_cutover WHERE id = true
 // Nothing calls these until the write gate is opened.
 // Read inside the delivery transaction. See migration 274 for why the gate is a
 // row rather than a process-level flag.
+//
+// FOR SHARE, not a plain SELECT. A plain read does not conflict with the
+// activation UPDATE, so this sequence is possible: a delivery reads `off`,
+// activation commits and a reconcile pass runs to completion, and only then
+// does the delivery commit its legacy-only row — leaving an unclaimed row
+// behind that the pass it raced has already finished looking for. The share
+// lock makes activation wait for every in-flight delivery, which is what turns
+// "the switch is on" into a boundary rather than a suggestion.
 func (q *Queries) GetInboxV2WriteEnabled(ctx context.Context) (bool, error) {
 	row := q.db.QueryRow(ctx, getInboxV2WriteEnabled)
 	var write_enabled bool
@@ -285,7 +319,7 @@ INSERT INTO inbox_item (
     $11, $12, $13, $14, $15,
     false, false, $16
 )
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key, dismissed_at
 `
 
 type InsertInboxItemForGroupParams struct {
@@ -357,30 +391,36 @@ func (q *Queries) InsertInboxItemForGroup(ctx context.Context, arg InsertInboxIt
 		&i.TargetKind,
 		&i.TargetID,
 		&i.DeliveryKey,
+		&i.DismissedAt,
 	)
 	return i, err
 }
 
 const listUnclaimedInboxSources = `-- name: ListUnclaimedInboxSources :many
-SELECT issue_id, workspace_id, COUNT(*) AS row_count
+SELECT DISTINCT
+    workspace_id,
+    CASE WHEN issue_id IS NULL THEN 'standalone' ELSE 'issue' END AS source_kind,
+    COALESCE(issue_id, id) AS source_id
 FROM inbox_item
 WHERE recipient_type = 'member'
   AND recipient_id = $1
   AND group_id IS NULL
-GROUP BY issue_id, workspace_id
 `
 
 type ListUnclaimedInboxSourcesRow struct {
-	IssueID     pgtype.UUID `json:"issue_id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RowCount    int64       `json:"row_count"`
+	SourceKind  string      `json:"source_kind"`
+	SourceID    pgtype.UUID `json:"source_id"`
 }
 
-// The distinct sources a person still has unclaimed rows for. One group is
-// created per row of this result.
+// The sources a person still has unclaimed rows for. One group is created per
+// row of this result.
 //
-// issue_id IS NULL rows each become their own standalone group, so they are
-// returned individually rather than folded together.
+// The projection, not a GROUP BY on issue_id: rows with no issue each become
+// their OWN standalone group keyed on the row id. Grouping by issue_id alone
+// would fold every issue-less notification a person has in a workspace into a
+// single group, so an autopilot pause and an unrelated quick-create failure
+// would share one read cursor and one archive state.
 func (q *Queries) ListUnclaimedInboxSources(ctx context.Context, recipientID pgtype.UUID) ([]ListUnclaimedInboxSourcesRow, error) {
 	rows, err := q.db.Query(ctx, listUnclaimedInboxSources, recipientID)
 	if err != nil {
@@ -390,7 +430,7 @@ func (q *Queries) ListUnclaimedInboxSources(ctx context.Context, recipientID pgt
 	items := []ListUnclaimedInboxSourcesRow{}
 	for rows.Next() {
 		var i ListUnclaimedInboxSourcesRow
-		if err := rows.Scan(&i.IssueID, &i.WorkspaceID, &i.RowCount); err != nil {
+		if err := rows.Scan(&i.WorkspaceID, &i.SourceKind, &i.SourceID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -399,6 +439,26 @@ func (q *Queries) ListUnclaimedInboxSources(ctx context.Context, recipientID pgt
 		return nil, err
 	}
 	return items, nil
+}
+
+const nextInboxItemSeqForGroup = `-- name: NextInboxItemSeqForGroup :one
+SELECT (COALESCE(MAX(event_seq), 0) + 1)::bigint FROM inbox_item WHERE group_id = $1
+`
+
+// The next sequence number for a group. Must be called with the group locked.
+//
+// MAX over ALL rows, including dismissed ones — deliberately NOT latest_seq.
+// latest_seq points at the REPRESENTATIVE row, and that pointer moves DOWN when
+// a dismissal retires the head. Allocating from it would then hand the next
+// delivery a number the dismissed row still occupies, and the insert would
+// collide on inbox_item_group_seq_uidx. The high-water mark and the
+// representative are two different questions; conflating them only looks
+// correct until the first dismissal.
+func (q *Queries) NextInboxItemSeqForGroup(ctx context.Context, groupID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, nextInboxItemSeqForGroup, groupID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const recomputeInboxGroupRepresentative = `-- name: RecomputeInboxGroupRepresentative :one
@@ -411,9 +471,9 @@ SET latest_seq       = COALESCE(s.max_seq, 0),
     updated_at       = $1
 FROM (
     SELECT
-        (SELECT event_seq FROM inbox_item WHERE group_id = $2 ORDER BY event_seq DESC LIMIT 1) AS max_seq,
+        (SELECT event_seq FROM inbox_item WHERE group_id = $2 AND dismissed_at IS NULL ORDER BY event_seq DESC LIMIT 1) AS max_seq,
         (SELECT id         FROM inbox_item WHERE group_id = $2 ORDER BY event_seq DESC LIMIT 1) AS max_id,
-        (SELECT created_at FROM inbox_item WHERE group_id = $2 ORDER BY event_seq DESC LIMIT 1) AS max_at
+        (SELECT created_at FROM inbox_item WHERE group_id = $2 AND dismissed_at IS NULL ORDER BY event_seq DESC LIMIT 1) AS max_at
 ) s
 WHERE g.id = $2
 RETURNING g.id, g.workspace_id, g.recipient_id, g.source_kind, g.source_id, g.latest_seq, g.latest_event_id, g.latest_event_at, g.read_through_seq, g.manual_unread, g.state_version, g.archived_at, g.snoozed_until, g.surfaced_at, g.created_at, g.updated_at
@@ -432,6 +492,10 @@ type RecomputeInboxGroupRepresentativeParams struct {
 // group has to fall back to the newest survivor. read_through_seq is clamped to
 // the new latest so a cursor that had passed the removed event does not sit
 // above the group's own head and report it permanently read.
+//
+// Dismissed rows are excluded from the search. A dismissed notification is one
+// the user was deliberately shown the back of; electing it as the row that
+// represents the group would put it straight back in front of them.
 func (q *Queries) RecomputeInboxGroupRepresentative(ctx context.Context, arg RecomputeInboxGroupRepresentativeParams) (InboxGroup, error) {
 	row := q.db.QueryRow(ctx, recomputeInboxGroupRepresentative, arg.Now, arg.ID)
 	var i InboxGroup
@@ -459,7 +523,7 @@ func (q *Queries) RecomputeInboxGroupRepresentative(ctx context.Context, arg Rec
 const refreshInboxItemMirror = `-- name: RefreshInboxItemMirror :execrows
 UPDATE inbox_item i
 SET read     = CASE WHEN g.unread AND i.event_seq = g.latest_seq THEN false ELSE true END,
-    archived = g.want_archived
+    archived = (g.want_archived OR i.dismissed_at IS NOT NULL)
 FROM (
     SELECT id,
            (archived_at IS NOT NULL) AS want_archived,
@@ -471,7 +535,7 @@ FROM (
 WHERE i.group_id = g.id
   AND (
         i.read IS DISTINCT FROM (CASE WHEN g.unread AND i.event_seq = g.latest_seq THEN false ELSE true END)
-     OR i.archived IS DISTINCT FROM g.want_archived
+     OR i.archived IS DISTINCT FROM (g.want_archived OR i.dismissed_at IS NOT NULL)
       )
 `
 
@@ -487,6 +551,11 @@ WHERE i.group_id = g.id
 // clients fold a group down to; marking the whole history unread would make the
 // old raw-row count report a group as N unread items instead of one.
 //
+// A dismissed row stays archived whatever the group says. Dismissal and group
+// archive are different facts (see migration 275): deriving `archived` from the
+// group alone would resurrect every retired task_failed row on the next
+// delivery, silently undoing a feature this refactor has to preserve.
+//
 // The IS DISTINCT FROM guard is not cosmetic. Without it every delivery rewrites
 // every row of the group, so a busy issue turns one insert into an update of its
 // entire history — and each of those updates is a new row version Postgres has
@@ -499,11 +568,71 @@ func (q *Queries) RefreshInboxItemMirror(ctx context.Context, groupID pgtype.UUI
 	return result.RowsAffected(), nil
 }
 
+const seedInboxGroupCursorForClaimedHistory = `-- name: SeedInboxGroupCursorForClaimedHistory :one
+UPDATE inbox_group g
+SET read_through_seq = CASE WHEN rep.read THEN g.latest_seq
+                            ELSE GREATEST(g.latest_seq - 1, 0) END,
+    state_version    = g.state_version + 1,
+    updated_at       = $1
+FROM (
+    SELECT COALESCE(
+        (SELECT i.read FROM inbox_item i
+         WHERE i.group_id = $2 AND i.dismissed_at IS NULL
+         ORDER BY i.event_seq DESC LIMIT 1), true) AS read
+) rep
+WHERE g.id = $2
+RETURNING g.id, g.workspace_id, g.recipient_id, g.source_kind, g.source_id, g.latest_seq, g.latest_event_id, g.latest_event_at, g.read_through_seq, g.manual_unread, g.state_version, g.archived_at, g.snoozed_until, g.surfaced_at, g.created_at, g.updated_at
+`
+
+type SeedInboxGroupCursorForClaimedHistoryParams struct {
+	Now pgtype.Timestamptz `json:"now"`
+	ID  pgtype.UUID        `json:"id"`
+}
+
+// After a lazy claim, seed the cursor from what v1 was already showing.
+//
+// The claimed rows are not new: they were sitting in the person's inbox with
+// their own read/archived booleans, and v1's invariant is that at most the
+// representative row is unread. So the honest translation reads that row:
+//
+//	representative unread in v1  -> cursor one below the head, so v2 agrees
+//	representative already read  -> cursor AT the head, nothing resurfaces
+//
+// A blanket "latest - 1" would re-announce an already-read history as unread the
+// first time the group materialises, which is the ghost-unread bug this whole
+// refactor exists to kill. Starting at 0 would be worse still. manual_unread is
+// untouched either way: it belongs to the user, not to a migration.
+func (q *Queries) SeedInboxGroupCursorForClaimedHistory(ctx context.Context, arg SeedInboxGroupCursorForClaimedHistoryParams) (InboxGroup, error) {
+	row := q.db.QueryRow(ctx, seedInboxGroupCursorForClaimedHistory, arg.Now, arg.ID)
+	var i InboxGroup
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RecipientID,
+		&i.SourceKind,
+		&i.SourceID,
+		&i.LatestSeq,
+		&i.LatestEventID,
+		&i.LatestEventAt,
+		&i.ReadThroughSeq,
+		&i.ManualUnread,
+		&i.StateVersion,
+		&i.ArchivedAt,
+		&i.SnoozedUntil,
+		&i.SurfacedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const setInboxV2WriteEnabled = `-- name: SetInboxV2WriteEnabled :exec
 UPDATE inbox_v2_cutover SET write_enabled = $1, updated_at = now()
 WHERE id = true
 `
 
+// Takes the row's exclusive lock, so it blocks behind every delivery currently
+// holding the share lock above and no delivery can straddle the flip.
 func (q *Queries) SetInboxV2WriteEnabled(ctx context.Context, writeEnabled bool) error {
 	_, err := q.db.Exec(ctx, setInboxV2WriteEnabled, writeEnabled)
 	return err

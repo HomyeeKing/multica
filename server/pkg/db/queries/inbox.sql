@@ -96,7 +96,14 @@ UPDATE inbox_item SET archived = false
 WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND issue_id = $4 AND archived = true;
 
 -- name: ArchiveInboxByIssueAndType :many
-UPDATE inbox_item SET archived = true
+-- Event-level dismissal: an issue reached a terminal status, so its stale
+-- task_failed rows stop advertising a failure the work has moved past.
+--
+-- dismissed_at records that this is a dismissal rather than the user archiving
+-- the issue. Without the distinction the v2 mirror, which derives `archived`
+-- for a whole group from the group's own archive state, would set these rows
+-- back to active on the next delivery — see migration 275.
+UPDATE inbox_item SET archived = true, dismissed_at = now()
 WHERE workspace_id = $1 AND issue_id = $2 AND type = $3 AND archived = false
 RETURNING recipient_type, recipient_id;
 

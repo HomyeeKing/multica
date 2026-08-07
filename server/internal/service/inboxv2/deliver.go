@@ -199,7 +199,58 @@ func (w *Writer) deliverOnce(ctx context.Context, d Delivery, now time.Time) (Re
 		return Result{}, fmt.Errorf("inboxv2: acquire group: %w", err)
 	}
 
-	seq := group.LatestSeq + 1
+	// Claim any unclaimed history for this source BEFORE taking a sequence
+	// number. The group lock is already held, so nothing can interleave.
+	//
+	// Order is the reason this happens here rather than in a background pass:
+	// history is older than the event being delivered, and the legacy endpoints
+	// sort by created_at. Claiming first means the history numbers 1..M in
+	// created_at order and this delivery takes M+1, so the sequence and the
+	// timestamp agree about which row represents the group. Claiming afterwards
+	// would either collide on inbox_item_group_seq_uidx or hand an older row a
+	// higher number than a newer one.
+	claimed, err := q.ClaimInboxItemsForSource(ctx, db.ClaimInboxItemsForSourceParams{
+		WorkspaceID: d.WorkspaceID,
+		RecipientID: d.RecipientID,
+		SourceKind:  string(d.SourceKind),
+		SourceID:    d.SourceID,
+		GroupID:     group.ID,
+		SeqOffset:   group.LatestSeq,
+	})
+	if err != nil {
+		return Result{}, fmt.Errorf("inboxv2: claim history: %w", err)
+	}
+	if claimed > 0 {
+		// The claimed rows advanced the group's head; recompute from the rows
+		// themselves rather than assuming, since dismissal may have retired
+		// some of what was just claimed.
+		group, err = q.RecomputeInboxGroupRepresentative(ctx, db.RecomputeInboxGroupRepresentativeParams{
+			ID:  group.ID,
+			Now: pgtype.Timestamptz{Time: now, Valid: true},
+		})
+		if err != nil {
+			return Result{}, fmt.Errorf("inboxv2: recompute after claim: %w", err)
+		}
+		// The claimed history is history the user has already been shown through
+		// v1, so the cursor parks one below the head rather than at zero, which
+		// would re-announce years of notifications as unread.
+		group, err = q.SeedInboxGroupCursorForClaimedHistory(ctx, db.SeedInboxGroupCursorForClaimedHistoryParams{
+			ID:  group.ID,
+			Now: pgtype.Timestamptz{Time: now, Valid: true},
+		})
+		if err != nil {
+			return Result{}, fmt.Errorf("inboxv2: seed cursor: %w", err)
+		}
+	}
+
+	// Allocate from the group's high-water mark, not from latest_seq. Those
+	// differ after a dismissal retires the representative: latest_seq moves down
+	// to the surviving head while the dismissed row keeps its number, so
+	// latest_seq+1 would collide with a row that is still there.
+	seq, err := q.NextInboxItemSeqForGroup(ctx, group.ID)
+	if err != nil {
+		return Result{}, fmt.Errorf("inboxv2: next sequence: %w", err)
+	}
 	createdAt := monotonicCreatedAt(now, group.LatestEventAt)
 
 	item, err := q.InsertInboxItemForGroup(ctx, db.InsertInboxItemForGroupParams{

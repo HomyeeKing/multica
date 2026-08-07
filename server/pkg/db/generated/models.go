@@ -644,6 +644,7 @@ type InboxItem struct {
 	TargetKind    pgtype.Text        `json:"target_kind"`
 	TargetID      pgtype.UUID        `json:"target_id"`
 	DeliveryKey   pgtype.Text        `json:"delivery_key"`
+	DismissedAt   pgtype.Timestamptz `json:"dismissed_at"`
 }
 
 type InboxV2Cutover struct {

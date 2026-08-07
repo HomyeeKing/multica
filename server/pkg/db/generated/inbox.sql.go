@@ -92,7 +92,7 @@ func (q *Queries) ArchiveInboxByIssue(ctx context.Context, arg ArchiveInboxByIss
 }
 
 const archiveInboxByIssueAndType = `-- name: ArchiveInboxByIssueAndType :many
-UPDATE inbox_item SET archived = true
+UPDATE inbox_item SET archived = true, dismissed_at = now()
 WHERE workspace_id = $1 AND issue_id = $2 AND type = $3 AND archived = false
 RETURNING recipient_type, recipient_id
 `
@@ -108,6 +108,13 @@ type ArchiveInboxByIssueAndTypeRow struct {
 	RecipientID   pgtype.UUID `json:"recipient_id"`
 }
 
+// Event-level dismissal: an issue reached a terminal status, so its stale
+// task_failed rows stop advertising a failure the work has moved past.
+//
+// dismissed_at records that this is a dismissal rather than the user archiving
+// the issue. Without the distinction the v2 mirror, which derives `archived`
+// for a whole group from the group's own archive state, would set these rows
+// back to active on the next delivery — see migration 275.
 func (q *Queries) ArchiveInboxByIssueAndType(ctx context.Context, arg ArchiveInboxByIssueAndTypeParams) ([]ArchiveInboxByIssueAndTypeRow, error) {
 	rows, err := q.db.Query(ctx, archiveInboxByIssueAndType, arg.WorkspaceID, arg.IssueID, arg.Type)
 	if err != nil {
@@ -131,7 +138,7 @@ func (q *Queries) ArchiveInboxByIssueAndType(ctx context.Context, arg ArchiveInb
 const archiveInboxItem = `-- name: ArchiveInboxItem :one
 UPDATE inbox_item SET archived = true
 WHERE id = $1
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key, dismissed_at
 `
 
 func (q *Queries) ArchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
@@ -158,6 +165,7 @@ func (q *Queries) ArchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxIt
 		&i.TargetKind,
 		&i.TargetID,
 		&i.DeliveryKey,
+		&i.DismissedAt,
 	)
 	return i, err
 }
@@ -237,7 +245,7 @@ INSERT INTO inbox_item (
     type, severity, issue_id, title, body,
     actor_type, actor_id, details
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key, dismissed_at
 `
 
 type CreateInboxItemParams struct {
@@ -290,12 +298,13 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 		&i.TargetKind,
 		&i.TargetID,
 		&i.DeliveryKey,
+		&i.DismissedAt,
 	)
 	return i, err
 }
 
 const getInboxItem = `-- name: GetInboxItem :one
-SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key FROM inbox_item
+SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key, dismissed_at FROM inbox_item
 WHERE id = $1
 `
 
@@ -323,12 +332,13 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 		&i.TargetKind,
 		&i.TargetID,
 		&i.DeliveryKey,
+		&i.DismissedAt,
 	)
 	return i, err
 }
 
 const getInboxItemInWorkspace = `-- name: GetInboxItemInWorkspace :one
-SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key FROM inbox_item
+SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key, dismissed_at FROM inbox_item
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -361,12 +371,13 @@ func (q *Queries) GetInboxItemInWorkspace(ctx context.Context, arg GetInboxItemI
 		&i.TargetKind,
 		&i.TargetID,
 		&i.DeliveryKey,
+		&i.DismissedAt,
 	)
 	return i, err
 }
 
 const listArchivedInboxItems = `-- name: ListArchivedInboxItems :many
-SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details, i.group_id, i.event_seq, i.target_kind, i.target_id, i.delivery_key,
+SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details, i.group_id, i.event_seq, i.target_kind, i.target_id, i.delivery_key, i.dismissed_at,
        iss.status as issue_status
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
@@ -411,6 +422,7 @@ type ListArchivedInboxItemsRow struct {
 	TargetKind    pgtype.Text        `json:"target_kind"`
 	TargetID      pgtype.UUID        `json:"target_id"`
 	DeliveryKey   pgtype.Text        `json:"delivery_key"`
+	DismissedAt   pgtype.Timestamptz `json:"dismissed_at"`
 	IssueStatus   pgtype.Text        `json:"issue_status"`
 }
 
@@ -459,6 +471,7 @@ func (q *Queries) ListArchivedInboxItems(ctx context.Context, arg ListArchivedIn
 			&i.TargetKind,
 			&i.TargetID,
 			&i.DeliveryKey,
+			&i.DismissedAt,
 			&i.IssueStatus,
 		); err != nil {
 			return nil, err
@@ -472,7 +485,7 @@ func (q *Queries) ListArchivedInboxItems(ctx context.Context, arg ListArchivedIn
 }
 
 const listInboxItems = `-- name: ListInboxItems :many
-SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details, i.group_id, i.event_seq, i.target_kind, i.target_id, i.delivery_key,
+SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details, i.group_id, i.event_seq, i.target_kind, i.target_id, i.delivery_key, i.dismissed_at,
        iss.status as issue_status
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
@@ -507,6 +520,7 @@ type ListInboxItemsRow struct {
 	TargetKind    pgtype.Text        `json:"target_kind"`
 	TargetID      pgtype.UUID        `json:"target_id"`
 	DeliveryKey   pgtype.Text        `json:"delivery_key"`
+	DismissedAt   pgtype.Timestamptz `json:"dismissed_at"`
 	IssueStatus   pgtype.Text        `json:"issue_status"`
 }
 
@@ -540,6 +554,7 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 			&i.TargetKind,
 			&i.TargetID,
 			&i.DeliveryKey,
+			&i.DismissedAt,
 			&i.IssueStatus,
 		); err != nil {
 			return nil, err
@@ -573,7 +588,7 @@ func (q *Queries) MarkAllInboxRead(ctx context.Context, arg MarkAllInboxReadPara
 const markInboxRead = `-- name: MarkInboxRead :one
 UPDATE inbox_item SET read = true
 WHERE id = $1
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key, dismissed_at
 `
 
 func (q *Queries) MarkInboxRead(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
@@ -600,6 +615,7 @@ func (q *Queries) MarkInboxRead(ctx context.Context, id pgtype.UUID) (InboxItem,
 		&i.TargetKind,
 		&i.TargetID,
 		&i.DeliveryKey,
+		&i.DismissedAt,
 	)
 	return i, err
 }
@@ -607,7 +623,7 @@ func (q *Queries) MarkInboxRead(ctx context.Context, id pgtype.UUID) (InboxItem,
 const markInboxUnread = `-- name: MarkInboxUnread :one
 UPDATE inbox_item SET read = false
 WHERE id = $1
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key, dismissed_at
 `
 
 // Exact inverse of MarkInboxRead, and item-level for the same reason it is:
@@ -640,6 +656,7 @@ func (q *Queries) MarkInboxUnread(ctx context.Context, id pgtype.UUID) (InboxIte
 		&i.TargetKind,
 		&i.TargetID,
 		&i.DeliveryKey,
+		&i.DismissedAt,
 	)
 	return i, err
 }
@@ -675,7 +692,7 @@ func (q *Queries) UnarchiveInboxByIssue(ctx context.Context, arg UnarchiveInboxB
 const unarchiveInboxItem = `-- name: UnarchiveInboxItem :one
 UPDATE inbox_item SET archived = false
 WHERE id = $1
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, group_id, event_seq, target_kind, target_id, delivery_key, dismissed_at
 `
 
 // Deliberately does not touch `read`: unarchiving restores an item to the main
@@ -705,6 +722,7 @@ func (q *Queries) UnarchiveInboxItem(ctx context.Context, id pgtype.UUID) (Inbox
 		&i.TargetKind,
 		&i.TargetID,
 		&i.DeliveryKey,
+		&i.DismissedAt,
 	)
 	return i, err
 }
