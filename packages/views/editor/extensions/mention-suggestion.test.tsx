@@ -1128,4 +1128,132 @@ describe("MentionList cancelled demotion", () => {
       expect(labels).not.toContain("Dead project 19");
     });
   });
+
+  // A direct hit — exact identifier, bare number, or full title — is the record
+  // the user typed out in full. The backend ranks it first and exempts it from
+  // the cancelled demotion; the picker has to agree, and exemption alone is not
+  // enough: slice(0, MAX_ITEMS) runs on the merged list, so a direct hit sitting
+  // behind a full window of cached candidates would still be cut.
+  describe("direct hits", () => {
+    const rowLabels = () =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+        .map((b) => b.querySelector("span.font-medium")?.textContent ?? "")
+        .filter((label) => label !== "");
+
+    const headings = () =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>("div.uppercase"),
+      ).map((el) => el.textContent ?? "");
+
+    it("keeps a cancelled issue matched by exact identifier out of the Cancelled group", async () => {
+      searchIssuesMock.mockResolvedValue({
+        issues: [
+          { id: "i-hit", identifier: "MUL-77", title: "Abandoned plan", status: "cancelled" },
+          { id: "i-other", identifier: "MUL-78", title: "MUL-77 follow-up", status: "todo" },
+        ],
+        total: 2,
+      });
+
+      render(<I18nWrapper><MentionList items={[]} query="MUL-77" command={vi.fn()} /></I18nWrapper>);
+
+      await waitFor(() => {
+        expect(screen.getByText("MUL-77")).toBeInTheDocument();
+      });
+      // The target the user spelled out stays on top; no demotion, no section.
+      expect(rowLabels()).toEqual(["MUL-77", "MUL-78"]);
+      expect(headings()).not.toContain("Cancelled");
+    });
+
+    it("treats a bare number as targeting the issue with that number", async () => {
+      searchIssuesMock.mockResolvedValue({
+        issues: [
+          { id: "i-live", identifier: "MUL-800", title: "Mentions 77 in passing", status: "todo" },
+          { id: "i-hit", identifier: "MUL-77", title: "Abandoned plan", status: "cancelled" },
+        ],
+        total: 2,
+      });
+
+      render(<I18nWrapper><MentionList items={[]} query="77" command={vi.fn()} /></I18nWrapper>);
+
+      await waitFor(() => {
+        expect(screen.getByText("MUL-77")).toBeInTheDocument();
+      });
+      expect(rowLabels()).toEqual(["MUL-77", "MUL-800"]);
+    });
+
+    it("keeps a cancelled project matched by its full title with the live rows", async () => {
+      searchIssuesMock.mockResolvedValue({
+        issues: [{ id: "i-live", identifier: "MUL-81", title: "Search revamp notes", status: "todo" }],
+        total: 1,
+      });
+      searchProjectsMock.mockResolvedValue({
+        projects: [
+          { id: "p-hit", title: "Search revamp", description: null, icon: null, status: "cancelled" },
+        ],
+        total: 1,
+      });
+
+      render(
+        <I18nWrapper>
+          <MentionList items={[]} query="Search revamp" command={vi.fn()} includeProjectSearch />
+        </I18nWrapper>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Search revamp")).toBeInTheDocument();
+      });
+      expect(rowLabels()).toEqual(["Search revamp", "MUL-81"]);
+      expect(headings()).not.toContain("Cancelled");
+    });
+
+    it("keeps a cancelled direct hit visible behind a full window of live candidates", async () => {
+      // 20 non-cancelled cached candidates already fill every slot. Exempting
+      // the direct hit from the demotion would leave it at position 21 and the
+      // truncation would still delete it, so it has to be pinned to the front.
+      searchIssuesMock.mockResolvedValue({
+        issues: [
+          { id: "i-hit", identifier: "MUL-99", title: "Abandoned plan", status: "cancelled" },
+        ],
+        total: 1,
+      });
+
+      const items: MentionItem[] = Array.from({ length: 20 }, (_, n) => ({
+        id: `i-live${n}`,
+        label: `MUL-${200 + n}`,
+        type: "issue" as const,
+        status: "todo" as const,
+      }));
+
+      render(<I18nWrapper><MentionList items={items} query="MUL-99" command={vi.fn()} /></I18nWrapper>);
+
+      await waitFor(() => {
+        expect(screen.getByText("MUL-99")).toBeInTheDocument();
+      });
+
+      const labels = rowLabels();
+      expect(labels).toHaveLength(20);
+      expect(labels[0]).toBe("MUL-99");
+      // A live candidate gave up the last slot, not the record the user typed.
+      expect(labels).not.toContain("MUL-219");
+    });
+
+    it("still demotes a cancelled row that merely contains the query", async () => {
+      // Guard against over-exempting: a partial match is not a direct hit.
+      searchIssuesMock.mockResolvedValue({
+        issues: [
+          { id: "i-dead", identifier: "MUL-91", title: "Abandoned plan", status: "cancelled" },
+          { id: "i-live", identifier: "MUL-92", title: "Active plan", status: "todo" },
+        ],
+        total: 2,
+      });
+
+      render(<I18nWrapper><MentionList items={[]} query="plan" command={vi.fn()} /></I18nWrapper>);
+
+      await waitFor(() => {
+        expect(screen.getByText("MUL-92")).toBeInTheDocument();
+      });
+      expect(rowLabels()).toEqual(["MUL-92", "MUL-91"]);
+      expect(headings()).toContain("Cancelled");
+    });
+  });
 });

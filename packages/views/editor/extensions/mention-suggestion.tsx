@@ -18,6 +18,10 @@ import { useAuthStore } from "@multica/core/auth";
 import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { isAgentRuntimeBound } from "@multica/core/agents";
 import { api } from "@multica/core/api";
+import {
+  isIssueDirectHit,
+  isProjectDirectHit,
+} from "@multica/core/search/cancelled-rank";
 import { isImeComposing } from "@multica/core/utils";
 import type {
   Issue,
@@ -100,7 +104,7 @@ interface MentionGroup {
   items: MentionItem[];
 }
 
-function groupItems(items: MentionItem[]): MentionGroup[] {
+function groupItems(items: MentionItem[], query: string): MentionGroup[] {
   const current: MentionItem[] = [];
   const recent: MentionItem[] = [];
   const search: MentionItem[] = [];
@@ -109,7 +113,7 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
   const cancelled: MentionItem[] = [];
 
   for (const item of items) {
-    if (isDemotedCancelled(item)) {
+    if (isDemotedCancelled(item, query)) {
       cancelled.push(item);
     } else if (item.group === "current") {
       current.push(item);
@@ -178,36 +182,73 @@ function mergeMentionItems(
  *    then projects, both tagged `search` — so a cancelled project still lands
  *    above a live issue. Per-type ranking cannot fix a cross-type list.
  *
- * Exempt: the curated `current` / `recent` groups. They are explicit context
- * rather than relevance hits, and "Current" has to survive the truncation even
- * when the issue being viewed is itself cancelled. Exact-hit exemption is not
- * needed here — the picker matches on identifier/title prefixes and the row is
- * still listed, just in the trailing section.
+ * Exempt, matching the server and the other search surfaces:
+ *
+ * - Direct hits. An exact identifier, a bare number, or a full title means the
+ *   user is targeting that one record; demoting it hides exactly what they
+ *   asked for. Shared with the backend rule via isIssueDirectHit /
+ *   isProjectDirectHit so the three surfaces cannot drift.
+ * - The curated `current` / `recent` groups. They are explicit context rather
+ *   than relevance hits, and "Current" has to survive the truncation even when
+ *   the issue being viewed is itself cancelled.
  */
-function isDemotedCancelled(item: MentionItem): boolean {
-  if (item.group === "current" || item.group === "recent") return false;
+function isDemotedCancelled(item: MentionItem, query: string): boolean {
+  if (isPinnedAboveTruncation(item, query)) return false;
   if (item.type === "issue") return item.status === "cancelled";
   if (item.type === "project") return item.projectStatus === "cancelled";
   return false;
 }
 
 /**
- * Stable cross-type partition applied BEFORE the MAX_ITEMS truncation, so
- * cancelled rows give up their slot rather than merely their position. Relative
- * order within each side is untouched, leaving the backend ranking in charge of
- * everything except "live before cancelled". groupItems() then renders the
- * cancelled side as the trailing section.
+ * Rows that must survive the MAX_ITEMS truncation: curated context and direct
+ * hits. Exempting a direct hit from the demotion is not enough on its own —
+ * `slice(0, MAX_ITEMS)` runs on the merged list, so a direct hit sitting behind
+ * 20 cached candidates would still be cut. Pinning it to the front is what
+ * actually keeps the record the user typed in full reachable, and it mirrors the
+ * server, which already ranks direct hits first.
+ *
+ * Issue mention rows carry the identifier in `label` and the title in
+ * `description`; project rows carry the title in `label`.
  */
-function demoteCancelledItems(items: MentionItem[]): MentionItem[] {
+function isPinnedAboveTruncation(item: MentionItem, query: string): boolean {
+  if (item.group === "current" || item.group === "recent") return true;
+  if (!query) return false;
+  if (item.type === "issue") {
+    return isIssueDirectHit(
+      { identifier: item.label, title: item.description },
+      query,
+    );
+  }
+  if (item.type === "project") {
+    return isProjectDirectHit({ title: item.label }, query);
+  }
+  return false;
+}
+
+/**
+ * Stable three-tier partition applied BEFORE the MAX_ITEMS truncation, so
+ * cancelled rows give up their slot rather than merely their position:
+ *
+ *   pinned (curated context + direct hits) → live → cancelled
+ *
+ * Relative order within each tier is untouched, leaving the backend ranking in
+ * charge of everything else. groupItems() then renders the cancelled tier as the
+ * trailing section.
+ */
+function demoteCancelledItems(items: MentionItem[], query: string): MentionItem[] {
+  const pinned: MentionItem[] = [];
   const live: MentionItem[] = [];
   const cancelled: MentionItem[] = [];
 
   for (const item of items) {
-    if (isDemotedCancelled(item)) cancelled.push(item);
+    if (isPinnedAboveTruncation(item, query)) pinned.push(item);
+    else if (isDemotedCancelled(item, query)) cancelled.push(item);
     else live.push(item);
   }
 
-  return cancelled.length > 0 ? [...live, ...cancelled] : items;
+  return pinned.length > 0 || cancelled.length > 0
+    ? [...pinned, ...live, ...cancelled]
+    : items;
 }
 
 export const MentionList = forwardRef<MentionListRef, MentionListProps>(
@@ -305,6 +346,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       const currentServerItems = searchedQuery === normalizedQuery ? serverItems : [];
       return demoteCancelledItems(
         mergeMentionItems(items, currentServerItems),
+        normalizedQuery,
       ).slice(0, MAX_ITEMS);
     }, [items, normalizedQuery, searchedQuery, serverItems]);
 
@@ -313,7 +355,10 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
     // the popup renders, top to bottom. Keyboard nav, Enter, clicks, highlight,
     // and scroll all index THIS, so the highlighted row always equals the
     // committed item — there is no second "data order" to drift against.
-    const groups = useMemo(() => groupItems(displayItems), [displayItems]);
+    const groups = useMemo(
+      () => groupItems(displayItems, normalizedQuery),
+      [displayItems, normalizedQuery],
+    );
     const orderedItems = useMemo(() => groups.flatMap((g) => g.items), [groups]);
 
     // Derive the numeric index from the pinned identity. If the selected item

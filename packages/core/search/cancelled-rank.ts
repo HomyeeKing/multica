@@ -42,7 +42,7 @@ export function parseSearchQueryNumber(query: string): number | null {
   return null;
 }
 
-function isExactTitle(title: string | undefined, query: string): boolean {
+function isExactTitle(title: string | null | undefined, query: string): boolean {
   if (!title) return false;
   const q = query.trim();
   if (!q) return false;
@@ -53,6 +53,10 @@ function isExactTitle(title: string | undefined, query: string): boolean {
  * A query targets this specific issue: exact identifier / bare number, or the
  * full title.
  *
+ * Every field is optional so callers holding only part of a row can share the
+ * one rule — the @mention picker, for instance, carries the identifier and the
+ * title but no `number`, which is then derived from the identifier.
+ *
  * Note: the server compares the title against an escapeLike'd parameter, so a
  * title containing `_` or `%` never counts as a direct hit there (a pre-existing
  * tier-1 escaping quirk, see buildSearchQuery). Client-side we compare the raw
@@ -60,11 +64,20 @@ function isExactTitle(title: string | undefined, query: string): boolean {
  * never demote something the server kept up — so the two stay compatible.
  */
 export function isIssueDirectHit(
-  issue: Pick<SearchIssueResult, "title" | "number" | "identifier">,
+  issue: {
+    title?: string | null;
+    number?: number | null;
+    identifier?: string | null;
+  },
   query: string,
 ): boolean {
   const targetNumber = parseSearchQueryNumber(query);
-  if (targetNumber !== null && issue.number === targetNumber) return true;
+  if (targetNumber !== null) {
+    const issueNumber =
+      issue.number ??
+      (issue.identifier ? parseSearchQueryNumber(issue.identifier) : null);
+    if (issueNumber === targetNumber) return true;
+  }
   if (
     issue.identifier &&
     issue.identifier.trim().toLowerCase() === query.trim().toLowerCase()
@@ -76,7 +89,7 @@ export function isIssueDirectHit(
 
 /** A query targets this specific project: its full title. */
 export function isProjectDirectHit(
-  project: Pick<SearchProjectResult, "title">,
+  project: { title?: string | null },
   query: string,
 ): boolean {
   return isExactTitle(project.title, query);

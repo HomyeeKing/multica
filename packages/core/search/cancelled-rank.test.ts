@@ -62,6 +62,30 @@ describe("direct hits", () => {
     expect(isProjectDirectHit(p, "search")).toBe(false);
     expect(isProjectDirectHit(p, "")).toBe(false);
   });
+
+  // The @mention picker holds the identifier and title but no `number`, so the
+  // number has to be derived from the identifier for it to share this rule.
+  it("derives the issue number from the identifier when number is absent", () => {
+    const row = { identifier: "MUL-77", title: "Abandoned plan" };
+    expect(isIssueDirectHit(row, "77")).toBe(true);
+    expect(isIssueDirectHit(row, "MUL-77")).toBe(true);
+    expect(isIssueDirectHit(row, "mul-77")).toBe(true);
+    expect(isIssueDirectHit(row, "Abandoned plan")).toBe(true);
+    expect(isIssueDirectHit(row, "plan")).toBe(false);
+    expect(isIssueDirectHit(row, "78")).toBe(false);
+  });
+
+  it("prefers an explicit number over the identifier", () => {
+    // Defensive: if the two ever disagree, `number` is the authoritative field.
+    const row = { number: 42, identifier: "MUL-77", title: "t" };
+    expect(isIssueDirectHit(row, "42")).toBe(true);
+    expect(isIssueDirectHit(row, "77")).toBe(false);
+  });
+
+  it("is not a direct hit when nothing identifies the row", () => {
+    expect(isIssueDirectHit({}, "MUL-1")).toBe(false);
+    expect(isProjectDirectHit({}, "anything")).toBe(false);
+  });
 });
 
 describe("partitionStable", () => {
