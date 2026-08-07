@@ -262,32 +262,58 @@ export function ManageViewsDialog({
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleting} onOpenChange={(v) => !v && setDeleting(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t(($) => $.view_bar.delete_title)}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(($) => $.view_bar.delete_description, { name: deleting?.name ?? "" })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t(($) => $.save_view.cancel)}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const view = deleting;
-                setDeleting(null);
-                if (!view) return;
-                void onDeleteView(view).then(
-                  () => toast.success(t(($) => $.view_bar.toast_deleted)),
-                  () => toast.error(t(($) => $.save_view.toast_failed)),
-                );
-              }}
-            >
-              {t(($) => $.view_bar.delete)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteViewConfirm
+        view={deleting}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null);
+        }}
+        onConfirm={onDeleteView}
+      />
     </>
+  );
+}
+
+/**
+ * The one delete-view confirmation, shared by the manage dialog and the
+ * view bar's context menu so both entrances carry identical copy and the
+ * same "deletes the view only, never issues" contract.
+ */
+export function DeleteViewConfirm({
+  view,
+  onOpenChange,
+  onConfirm,
+}: {
+  view: IssueView | null;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (view: IssueView) => Promise<void>;
+}) {
+  const { t } = useT("issues");
+  return (
+    <AlertDialog open={!!view} onOpenChange={(v) => !v && onOpenChange(false)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t(($) => $.view_bar.delete_title)}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {t(($) => $.view_bar.delete_description, { name: view?.name ?? "" })}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t(($) => $.save_view.cancel)}</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              const target = view;
+              onOpenChange(false);
+              if (!target) return;
+              void onConfirm(target).then(
+                () => toast.success(t(($) => $.view_bar.toast_deleted)),
+                () => toast.error(t(($) => $.save_view.toast_failed)),
+              );
+            }}
+          >
+            {t(($) => $.view_bar.delete)}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

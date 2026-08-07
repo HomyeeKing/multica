@@ -2971,6 +2971,13 @@ export class ApiClient {
     });
   }
 
+  async getIssueView(id: string): Promise<IssueView | null> {
+    const raw = await this.fetch<unknown>(`/api/issue-views/${id}`);
+    return parseWithFallback(raw, IssueViewSchema.nullable(), null, {
+      endpoint: "GET /api/issue-views/{id}",
+    });
+  }
+
   async deleteIssueView(id: string): Promise<void> {
     await this.fetch(`/api/issue-views/${id}`, { method: "DELETE" });
   }

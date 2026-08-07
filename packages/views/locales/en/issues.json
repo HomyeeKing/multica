@@ -726,6 +726,9 @@
     "delete": "Delete",
     "delete_title": "Delete view?",
     "delete_description": "“{{name}}” will be deleted for everyone who can see it",
-    "toast_deleted": "View deleted"
+    "toast_deleted": "View deleted",
+    "context_edit": "Edit view",
+    "context_pin": "Pin to sidebar",
+    "context_unpin": "Unpin from sidebar"
   }
 }

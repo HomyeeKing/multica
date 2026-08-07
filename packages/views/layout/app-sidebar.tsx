@@ -16,7 +16,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import {
+import { Layers,
   ChevronDown,
   ChevronRight,
   LogOut,
@@ -57,6 +57,13 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useAuthStore } from "@multica/core/auth";
+import { useFeatureEnabled } from "@multica/core/config";
+import { SAVED_ISSUE_VIEWS_FLAG } from "@multica/core/feature-flags";
+import { issueViewDetailOptions } from "@multica/core/issue-views/queries";
+import {
+  issueViewContainerKey,
+  useActiveIssueViewStore,
+} from "@multica/core/issue-views/active-view-store";
 import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multica/core/paths";
 import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -178,6 +185,8 @@ function SortablePinItem({
   onUnpin,
   label,
   iconNode,
+  onNavigate,
+  isActiveOverride,
 }: {
   pin: PinnedItem;
   href: string;
@@ -185,6 +194,10 @@ function SortablePinItem({
   onUnpin: () => void;
   label: string;
   iconNode: React.ReactNode;
+  /** Runs on a real click (not a drag-release) before navigation. */
+  onNavigate?: () => void;
+  /** Overrides the plain path comparison (view pins carry extra state). */
+  isActiveOverride?: boolean;
 }) {
   const { t } = useT("layout");
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: pin.id });
@@ -195,7 +208,7 @@ function SortablePinItem({
   }, [isDragging]);
 
   const style = { transform: CSS.Transform.toString(transform), transition };
-  const isActive = pathname === href;
+  const isActive = isActiveOverride ?? pathname === href;
 
   return (
     <SidebarMenuItem
@@ -215,6 +228,7 @@ function SortablePinItem({
             event.preventDefault();
             return;
           }
+          onNavigate?.();
         }}
         className={cn(
           "text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground",
@@ -272,23 +286,72 @@ function PinRow({
   wsId: string;
 }) {
   const isIssue = pin.item_type === "issue";
+  const isView = pin.item_type === "view";
+  // Explicit === true: with the flag off (or an older backend) view pins
+  // stay dormant — hidden but never auto-unpinned, so the pin survives
+  // until the feature is reachable again (API-compat rules).
+  const savedViewsEnabled = useFeatureEnabled(SAVED_ISSUE_VIEWS_FLAG) === true;
+  const p = useWorkspacePaths();
+  const setActiveView = useActiveIssueViewStore((s) => s.setActive);
   const issueQuery = useQuery({
     ...issueDetailOptions(wsId, pin.item_id),
     enabled: isIssue,
   });
   const projectQuery = useQuery({
     ...projectDetailOptions(wsId, pin.item_id),
-    enabled: !isIssue,
+    enabled: pin.item_type === "project",
+  });
+  const viewQuery = useQuery({
+    ...issueViewDetailOptions(wsId, pin.item_id),
+    enabled: isView && savedViewsEnabled,
   });
 
   const triggeredRef = useRef(false);
   useEffect(() => {
-    const err = isIssue ? issueQuery.error : projectQuery.error;
+    const err = isIssue
+      ? issueQuery.error
+      : isView
+        ? viewQuery.error
+        : projectQuery.error;
     if (err instanceof ApiError && err.status === 404 && !triggeredRef.current) {
       triggeredRef.current = true;
       onUnpin();
     }
-  }, [isIssue, issueQuery.error, onUnpin, projectQuery.error]);
+  }, [isIssue, isView, issueQuery.error, onUnpin, projectQuery.error, viewQuery.error]);
+
+  const activeViewByContainer = useActiveIssueViewStore((s) => s.active);
+  if (isView) {
+    if (!savedViewsEnabled) return null;
+    if (viewQuery.isPending) return <PinSkeleton />;
+    if (viewQuery.isError || !viewQuery.data) return null;
+    const view = viewQuery.data;
+    const viewHref =
+      view.scope_type === "my"
+        ? p.myIssues()
+        : view.scope_type === "project" && view.scope_id
+          ? p.projectDetail(view.scope_id)
+          : p.issues();
+    const containerKey = issueViewContainerKey(wsId, {
+      scope_type: view.scope_type as "workspace" | "my" | "project",
+      scope_id: view.scope_id,
+    });
+    return (
+      <SortablePinItem
+        pin={pin}
+        href={viewHref}
+        pathname={pathname}
+        onUnpin={onUnpin}
+        label={view.name}
+        iconNode={<Layers className="!size-3.5 shrink-0" />}
+        // Active only when this exact view is open on its surface — the
+        // path alone also matches the plain tab.
+        isActiveOverride={
+          pathname === viewHref && activeViewByContainer[containerKey] === view.id
+        }
+        onNavigate={() => setActiveView(containerKey, view.id)}
+      />
+    );
+  }
 
   if (isIssue) {
     if (issueQuery.isPending) return <PinSkeleton />;
@@ -436,7 +499,14 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const sidebarScrollRef = useRef<HTMLDivElement>(null);
   const sidebarFadeStyle = useScrollFade(sidebarScrollRef, 24);
   const getPinHref = useCallback(
-    (pin: PinnedItem) => (pin.item_type === "issue" ? p.issueDetail(pin.item_id) : p.projectDetail(pin.item_id)),
+    (pin: PinnedItem) =>
+      pin.item_type === "issue"
+        ? p.issueDetail(pin.item_id)
+        : pin.item_type === "project"
+          ? p.projectDetail(pin.item_id)
+          // Views know their target only after their detail loads — the row
+          // resolves its own href; this placeholder never renders as a link.
+          : "",
     [p],
   );
 

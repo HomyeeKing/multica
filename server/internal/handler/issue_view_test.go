@@ -329,3 +329,65 @@ func TestProjectIssueViewVariant(t *testing.T) {
 		t.Fatalf("expected 400 for my-variant on project view, got %d", code)
 	}
 }
+
+func TestPinIssueView(t *testing.T) {
+	enableIssueViews(t)
+
+	shared, code, body := createIssueViewForTest(t, map[string]any{
+		"name":       "Pinnable",
+		"scope_type": "workspace",
+		"visibility": "workspace",
+		"query":      map[string]any{},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", code, body)
+	}
+	private, code, body := createIssueViewForTest(t, map[string]any{
+		"name":       "Secret",
+		"scope_type": "workspace",
+		"visibility": "private",
+		"query":      map[string]any{},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", code, body)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM pinned_item WHERE item_type = 'view'`)
+	})
+
+	pinView := func(userID, viewID string) int {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/pins", map[string]any{
+			"item_type": "view",
+			"item_id":   viewID,
+		})
+		if userID != "" {
+			req.Header.Set("X-User-ID", userID)
+		}
+		testHandler.CreatePin(w, req)
+		return w.Code
+	}
+
+	// Shared view: any member can pin it.
+	if got := pinView("", shared.ID); got != http.StatusCreated {
+		t.Fatalf("pin shared view: expected 201, got %d", got)
+	}
+	// Own private view: pinnable by its owner.
+	if got := pinView("", private.ID); got != http.StatusCreated {
+		t.Fatalf("pin own private view: expected 201, got %d", got)
+	}
+	// Foreign private view: 404 — a pin must not confirm its existence.
+	otherID := createSecondWorkspaceMember(t)
+	if got := pinView(otherID, private.ID); got != http.StatusNotFound {
+		t.Fatalf("pin foreign private view: expected 404, got %d", got)
+	}
+	// Unknown type still rejected.
+	w := httptest.NewRecorder()
+	testHandler.CreatePin(w, newRequest("POST", "/api/pins", map[string]any{
+		"item_type": "label",
+		"item_id":   shared.ID,
+	}))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown item_type, got %d", w.Code)
+	}
+}

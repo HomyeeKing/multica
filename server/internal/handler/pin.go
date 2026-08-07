@@ -84,8 +84,8 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.ItemType != "issue" && req.ItemType != "project" {
-		writeError(w, http.StatusBadRequest, "item_type must be 'issue' or 'project'")
+	if req.ItemType != "issue" && req.ItemType != "project" && req.ItemType != "view" {
+		writeError(w, http.StatusBadRequest, "item_type must be 'issue', 'project' or 'view'")
 		return
 	}
 	if req.ItemID == "" {
@@ -116,6 +116,17 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 			ID: itemUUID, WorkspaceID: wsUUID,
 		}); err != nil {
 			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+	case "view":
+		// Same read rule as the view endpoints: your own views, or views
+		// shared to the workspace. Foreign private views 404 — a pin must
+		// never confirm their existence.
+		view, err := h.Queries.GetIssueView(r.Context(), db.GetIssueViewParams{
+			ID: itemUUID, WorkspaceID: wsUUID,
+		})
+		if err != nil || !canReadIssueView(view, parseUUID(userID)) {
+			writeError(w, http.StatusNotFound, "view not found")
 			return
 		}
 	}

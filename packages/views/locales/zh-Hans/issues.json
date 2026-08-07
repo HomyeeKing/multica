@@ -701,6 +701,9 @@
     "delete": "删除",
     "delete_title": "删除视图？",
     "delete_description": "「{{name}}」将对所有可见成员删除",
-    "toast_deleted": "视图已删除"
+    "toast_deleted": "视图已删除",
+    "context_edit": "编辑视图",
+    "context_pin": "固定到侧栏",
+    "context_unpin": "从侧栏取消固定"
   }
 }
