@@ -161,6 +161,21 @@ printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_
 			},
 		},
 		{
+			// A thinking-only trailing event carries neither an answer nor an
+			// intermediacy signal, so it must not discard the answer the model
+			// already delivered. Regression for the overwrite that turned a
+			// complete reply into a no-response turn.
+			name:       "text-less trailing assistant event preserves the last answer",
+			scriptBody: multiTurnStream + `printf '%s\n' '{"type":"assistant","message":{"role":"assistant","model":"test-model","content":[{"type":"thinking","text":"SILENT DELIBERATION"}]}}'` + "\n" + `printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-boundary","result":""}'` + "\n",
+			wantStatus: "completed",
+			wantOutput: "LAST ASSISTANT ANSWER",
+			forbiddenOutput: []string{
+				"FIRST-TURN NARRATION",
+				"TOOL TRACE",
+				"SILENT DELIBERATION",
+			},
+		},
+		{
 			name:       "clean exit without result fails closed",
 			scriptBody: multiTurnStream,
 			wantStatus: "failed",

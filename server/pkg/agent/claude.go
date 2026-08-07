@@ -235,13 +235,18 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				assistantEventCount++
 				assistantText, tools := b.handleAssistant(msg, msgCh, usage)
 				toolUseCount += tools
-				if tools == 0 {
+				if tools == 0 && assistantText != "" {
 					lastAssistantText = assistantText
-				} else {
+				} else if tools > 0 {
 					// A turn that invokes a tool is intermediate even when it also
 					// contains narration. Do not use it as an empty-result fallback.
 					lastAssistantText = ""
 				}
+				// A text-less, tool-less assistant event (thinking-only, or a
+				// content block set we render nothing for) carries no answer and
+				// no intermediacy signal, so it must leave the fallback alone.
+				// Overwriting it with "" discarded an answer the model had
+				// already delivered. Matches qwen's handling.
 			case "user":
 				if b.handleUser(msg, msgCh) {
 					sawAsyncLaunch = true

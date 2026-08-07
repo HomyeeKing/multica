@@ -215,13 +215,16 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 				assistantEventCount++
 				assistantText, tools := b.handleAssistant(msg, msgCh, usage)
 				toolUseCount += tools
-				if tools == 0 {
+				if tools == 0 && assistantText != "" {
 					lastAssistantText = assistantText
-				} else {
+				} else if tools > 0 {
 					// A turn that invokes a tool is intermediate even when it also
 					// contains narration. Do not use it as an empty-result fallback.
 					lastAssistantText = ""
 				}
+				// A text-less, tool-less assistant event carries no answer and no
+				// intermediacy signal, so it must leave the fallback alone. Matches
+				// qwen's handling.
 			case "user":
 				b.handleUser(msg, msgCh)
 			case "system":
