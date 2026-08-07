@@ -1011,6 +1011,140 @@ func TestOpencodeProcessEventsToolErrorThenCleanFinish(t *testing.T) {
 	}
 }
 
+func TestOpencodeProcessEventsEmptyFinalStepFails(t *testing.T) {
+	t.Parallel()
+
+	b := &opencodeBackend{cfg: Config{Logger: slog.Default()}}
+	ch := make(chan Message, 256)
+
+	// Regression for #6522. The run did real work, then the provider stream
+	// died: the final step opened, emitted a reasoning part (which carries no
+	// deliverable and no tokens), and closed with reason "unknown" and an
+	// all-zero token block. `opencode run` exited 0, so the daemon reported
+	// `completed` with an empty agent_error and the task stalled with no
+	// deliverable. Zero input tokens means the provider round-trip never
+	// happened — that is a dead stream, not a completion.
+	lines := strings.Join([]string{
+		`{"type":"step_start","timestamp":1000,"sessionID":"ses_void","part":{"type":"step-start"}}`,
+		`{"type":"text","timestamp":1001,"sessionID":"ses_void","part":{"type":"text","text":"All context gathered. Let me set up and begin."}}`,
+		`{"type":"tool_use","timestamp":1002,"sessionID":"ses_void","part":{"type":"tool","tool":"bash","callID":"call_1","state":{"status":"completed","input":{"command":"ls"},"output":"ok\n"}}}`,
+		`{"type":"step_finish","timestamp":1003,"sessionID":"ses_void","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":14585,"output":89,"cache":{"write":0,"read":0}}}}`,
+		`{"type":"step_start","timestamp":1004,"sessionID":"ses_void","part":{"type":"step-start"}}`,
+		`{"type":"reasoning","timestamp":1005,"sessionID":"ses_void","part":{"type":"reasoning","text":"thinking..."}}`,
+		`{"type":"step_finish","timestamp":1006,"sessionID":"ses_void","part":{"type":"step-finish","reason":"unknown","tokens":{"input":0,"output":0,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}`,
+	}, "\n")
+
+	result := b.processEvents(strings.NewReader(lines), ch)
+
+	if result.status != "failed" {
+		t.Errorf("status: got %q, want %q (an empty final step must not complete the run)", result.status, "failed")
+	}
+	if !strings.Contains(result.errMsg, "empty step") {
+		t.Errorf("errMsg: got %q, want it to name the empty step", result.errMsg)
+	}
+	if !result.noTerminalSignal {
+		t.Error("noTerminalSignal: got false, want true")
+	}
+	// Work done before the stream died must still be reported, so the failure
+	// stays diagnosable and the usage already paid for is not lost.
+	if result.output != "All context gathered. Let me set up and begin." {
+		t.Errorf("output: got %q, want the text emitted before the empty step", result.output)
+	}
+	if result.usage.InputTokens != 14585 || result.usage.OutputTokens != 89 {
+		t.Errorf("usage: got %+v, want the first step's tokens preserved", result.usage)
+	}
+
+	close(ch)
+}
+
+func TestOpencodeProcessEventsEmptyStepMidRunRecovers(t *testing.T) {
+	t.Parallel()
+
+	b := &opencodeBackend{cfg: Config{Logger: slog.Default()}}
+	ch := make(chan Message, 256)
+
+	// Only the step the run *ends* on matters. A void step that the run
+	// recovers from — the next step produces real output and closes cleanly —
+	// is not evidence of a dead stream and must stay "completed".
+	lines := strings.Join([]string{
+		`{"type":"step_start","timestamp":1000,"sessionID":"ses_recover","part":{"type":"step-start"}}`,
+		`{"type":"step_finish","timestamp":1001,"sessionID":"ses_recover","part":{"type":"step-finish","reason":"unknown","tokens":{"input":0,"output":0,"cache":{"write":0,"read":0}}}}`,
+		`{"type":"step_start","timestamp":1002,"sessionID":"ses_recover","part":{"type":"step-start"}}`,
+		`{"type":"text","timestamp":1003,"sessionID":"ses_recover","part":{"type":"text","text":"recovered and done"}}`,
+		`{"type":"step_finish","timestamp":1004,"sessionID":"ses_recover","part":{"type":"step-finish","reason":"stop","tokens":{"input":120,"output":8,"cache":{"write":0,"read":0}}}}`,
+	}, "\n")
+
+	result := b.processEvents(strings.NewReader(lines), ch)
+
+	if result.status != "completed" {
+		t.Errorf("status: got %q, want %q (a recovered void step must not fail the run)", result.status, "completed")
+	}
+	if result.errMsg != "" {
+		t.Errorf("errMsg: got %q, want empty", result.errMsg)
+	}
+
+	close(ch)
+}
+
+func TestOpencodeProcessEventsToolOnlyFinalStepStaysCompleted(t *testing.T) {
+	t.Parallel()
+
+	b := &opencodeBackend{cfg: Config{Logger: slog.Default()}}
+	ch := make(chan Message, 256)
+
+	// The guard must key on "this step produced nothing", not "the run produced
+	// no text". A task whose only deliverable is a tool side effect — here a
+	// provider-executed tool, so no continuation step is owed — legitimately
+	// ends without any assistant prose and must stay green.
+	lines := strings.Join([]string{
+		`{"type":"step_start","timestamp":1000,"sessionID":"ses_toolonly","part":{"type":"step-start"}}`,
+		`{"type":"tool_use","timestamp":1001,"sessionID":"ses_toolonly","part":{"type":"tool","tool":"web_search","callID":"call_1","metadata":{"providerExecuted":true},"state":{"status":"completed","input":{"query":"weather"},"output":"sunny"}}}`,
+		`{"type":"step_finish","timestamp":1002,"sessionID":"ses_toolonly","part":{"type":"step-finish","reason":"stop","tokens":{"input":0,"output":0,"cache":{"write":0,"read":0}}}}`,
+	}, "\n")
+
+	result := b.processEvents(strings.NewReader(lines), ch)
+
+	if result.status != "completed" {
+		t.Errorf("status: got %q, want %q (a tool call is a productive step)", result.status, "completed")
+	}
+	if result.errMsg != "" {
+		t.Errorf("errMsg: got %q, want empty", result.errMsg)
+	}
+
+	close(ch)
+}
+
+func TestOpencodeProcessEventsTokenOnlyFinalStepStaysCompleted(t *testing.T) {
+	t.Parallel()
+
+	b := &opencodeBackend{cfg: Config{Logger: slog.Default()}}
+	ch := make(chan Message, 256)
+
+	// A step that emitted neither text nor a tool call but reports real token
+	// usage did reach the provider. Whatever it spent those tokens on (a
+	// reasoning-only turn, output the CLI chose not to stream), it is not the
+	// zero-round-trip shape the guard targets, so it must stay green.
+	lines := strings.Join([]string{
+		`{"type":"step_start","timestamp":1000,"sessionID":"ses_tokens","part":{"type":"step-start"}}`,
+		`{"type":"text","timestamp":1001,"sessionID":"ses_tokens","part":{"type":"text","text":"answer"}}`,
+		`{"type":"step_finish","timestamp":1002,"sessionID":"ses_tokens","part":{"type":"step-finish","reason":"stop","tokens":{"input":900,"output":40,"cache":{"write":0,"read":0}}}}`,
+		`{"type":"step_start","timestamp":1003,"sessionID":"ses_tokens","part":{"type":"step-start"}}`,
+		`{"type":"reasoning","timestamp":1004,"sessionID":"ses_tokens","part":{"type":"reasoning","text":"thinking..."}}`,
+		`{"type":"step_finish","timestamp":1005,"sessionID":"ses_tokens","part":{"type":"step-finish","reason":"stop","tokens":{"input":950,"output":0,"cache":{"write":0,"read":0}}}}`,
+	}, "\n")
+
+	result := b.processEvents(strings.NewReader(lines), ch)
+
+	if result.status != "completed" {
+		t.Errorf("status: got %q, want %q (non-zero tokens prove the provider round-trip happened)", result.status, "completed")
+	}
+	if result.errMsg != "" {
+		t.Errorf("errMsg: got %q, want empty", result.errMsg)
+	}
+
+	close(ch)
+}
+
 // ── Windows native-binary resolution tests ──
 
 // fakeStat returns a statFn that reports any path in `present` as existing

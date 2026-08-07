@@ -272,7 +272,7 @@ type eventResult struct {
 	output           string
 	sessionID        string
 	usage            TokenUsage // accumulated token usage across all steps
-	noTerminalSignal bool       // guard fired: stream reached EOF before a step or required continuation completed
+	noTerminalSignal bool       // guard fired: the stream ended without evidence the run actually finished
 }
 
 // processEvents reads JSON lines from r, dispatches events to ch, and returns
@@ -304,6 +304,23 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 	stepHasContinuationTool := false // current step has a local tool result OpenCode must feed back
 	awaitingContinuation := false    // the last step_finish still required another step
 
+	// Step bracketing still misses a third shape: a step that opens and closes
+	// cleanly while carrying nothing at all — no text, no tool call, and an
+	// all-zero token block (#6522, observed as step_finish reason "unknown" with
+	// every token counter and the cost at 0). Zero input tokens means the
+	// provider round-trip never happened, so that step is a dead stream wearing
+	// a clean finish, and ending a run on one is another false-green completion.
+	//
+	// The criterion is deliberately "this step produced nothing", NOT "the run
+	// produced no text": a task whose only deliverable is a tool side effect is
+	// legitimate and must stay green. Any single sign of life — text, a tool
+	// call, or any non-zero token counter — keeps the step productive. This is
+	// also why the reason itself is not consulted: a missing or unrecognised
+	// reason stays terminal for protocol compatibility (see the back-compat
+	// regression), and voidness is orthogonal to it.
+	stepProducedOutput := false // current step emitted text, a tool call, or token usage
+	lastStepVoid := false       // the most recently closed step produced nothing at all
+
 	scanner := newAgentStreamScanner(r)
 
 	for scanner.Scan() {
@@ -324,8 +341,12 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 		switch event.Type {
 		case "text":
 			b.handleTextEvent(event, ch, &output)
+			if event.Part.Text != "" {
+				stepProducedOutput = true
+			}
 		case "tool_use":
 			b.handleToolUseEvent(event, ch)
+			stepProducedOutput = true
 			if event.Part.Metadata == nil || !event.Part.Metadata.ProviderExecuted {
 				stepHasContinuationTool = true
 			}
@@ -335,13 +356,16 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 			openStep = true
 			stepHasContinuationTool = false
 			awaitingContinuation = false
+			stepProducedOutput = false
 			trySend(ch, Message{Type: MessageStatus, Status: "running"})
 		case "step_finish":
 			openStep = false
 			awaitingContinuation = event.Part.Reason == "tool-calls" ||
 				(event.Part.Reason != "" && stepHasContinuationTool)
 			stepHasContinuationTool = false
-			// Accumulate token usage from step_finish events.
+			// Accumulate token usage from step_finish events. Any non-zero
+			// counter is also proof the provider round-trip really happened,
+			// which keeps the step out of the void-step guard below.
 			if t := event.Part.Tokens; t != nil {
 				usage.InputTokens += t.Input
 				usage.OutputTokens += t.Output
@@ -349,7 +373,12 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 					usage.CacheReadTokens += t.Cache.Read
 					usage.CacheWriteTokens += t.Cache.Write
 				}
+				if t.Input > 0 || t.Output > 0 ||
+					(t.Cache != nil && (t.Cache.Read > 0 || t.Cache.Write > 0)) {
+					stepProducedOutput = true
+				}
 			}
+			lastStepVoid = !stepProducedOutput
 		}
 	}
 
@@ -363,20 +392,27 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 	}
 
 	// Require a positive terminal signal. A clean EOF while a step is still
-	// open — or right after a step that finished with reason "tool-calls",
-	// whose continuation step never started — means the run did not finish:
-	// its provider stream died and `opencode run` exited without emitting an
-	// error event. Fail closed on that structural evidence rather than
-	// reporting a false-green completion.
+	// open — right after a step that finished with reason "tool-calls", whose
+	// continuation step never started — or on a step that carried nothing at
+	// all means the run did not finish: its provider stream died and
+	// `opencode run` exited without emitting an error event. Fail closed on
+	// that structural evidence rather than reporting a false-green completion.
 	noTerminalSignal := false
-	if finalStatus == "completed" && (openStep || awaitingContinuation) {
-		finalStatus = "failed"
-		if openStep {
+	if finalStatus == "completed" {
+		switch {
+		case openStep:
+			finalStatus = "failed"
 			finalError = "opencode stream ended without a terminal signal (step still open at EOF)"
-		} else {
+			noTerminalSignal = true
+		case awaitingContinuation:
+			finalStatus = "failed"
 			finalError = "opencode stream ended without a terminal signal (last step required a continuation that never started)"
+			noTerminalSignal = true
+		case lastStepVoid:
+			finalStatus = "failed"
+			finalError = "opencode stream ended on an empty step (no text, no tool call, no token usage) — the provider produced nothing"
+			noTerminalSignal = true
 		}
-		noTerminalSignal = true
 	}
 
 	return eventResult{
