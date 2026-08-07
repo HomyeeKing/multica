@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-const emptySuccessfulStreamResult = "The agent completed without a final response."
-
 // streamTerminalState keeps the user-facing final answer separate from the
 // streamed assistant turns. Assistant messages are still emitted through the
 // Session.Messages channel for live progress/transcript storage, but only a
@@ -40,6 +38,17 @@ type streamTerminalState struct {
 // stream-json protocol completed: success requires a result event. Failed runs
 // always return an empty output so upstream issue/chat fallbacks can never
 // mistake a partial transcript for a final answer.
+//
+// A SUCCESSFUL run with no deliverable text returns an empty output for the same
+// reason. Empty is the platform's signal for "this turn produced no final text",
+// and every delivery surface already owns a decision keyed on it: an issue task
+// skips the synthesized fallback comment, a direct chat writes a localized
+// no_response outcome, and a Slack/Lark channel drops the turn rather than push
+// a placeholder outward. Returning prose here instead makes the output non-empty
+// and silently defeats all three at once — that is how an English sentinel
+// reached a Lark thread (GH #6462). Which words a user sees, and in which
+// language, belongs to each delivery surface; the stream parser only reports
+// whether text exists.
 func finalizeStreamResult(
 	provider string,
 	timeout time.Duration,
@@ -112,10 +121,7 @@ func finalizeStreamResult(
 	if state.finalResultText != "" {
 		return status, state.finalResultText, ""
 	}
-	if state.lastAssistantText != "" {
-		return status, state.lastAssistantText, ""
-	}
-	return status, emptySuccessfulStreamResult, ""
+	return status, state.lastAssistantText, ""
 }
 
 type streamProtocolObservation struct {

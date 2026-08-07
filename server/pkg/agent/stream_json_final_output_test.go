@@ -12,7 +12,11 @@ import (
 	"time"
 )
 
-func TestFinalizeStreamResultEmptySuccessWithoutAssistantUsesSafeNotice(t *testing.T) {
+// A successful run that produced no deliverable text must report an EMPTY
+// output, never a placeholder sentence. Empty is what the issue / direct-chat /
+// channel delivery paths each branch on to pick their own no-response behavior;
+// any non-empty prose here defeats all three at once (GH #6462).
+func TestFinalizeStreamResultEmptySuccessWithoutAssistantReturnsEmptyOutput(t *testing.T) {
 	t.Parallel()
 
 	status, output, errMsg := finalizeStreamResult(
@@ -25,8 +29,8 @@ func TestFinalizeStreamResultEmptySuccessWithoutAssistantUsesSafeNotice(t *testi
 		streamTerminalState{sawResult: true},
 		"",
 	)
-	if status != "completed" || output != emptySuccessfulStreamResult || errMsg != "" {
-		t.Fatalf("finalizeStreamResult() = (%q, %q, %q), want completed safe notice", status, output, errMsg)
+	if status != "completed" || output != "" || errMsg != "" {
+		t.Fatalf("finalizeStreamResult() = (%q, %q, %q), want completed with empty output", status, output, errMsg)
 	}
 }
 
@@ -150,10 +154,10 @@ printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_
 			},
 		},
 		{
-			name:       "empty successful result after tool-using turn uses safe notice",
+			name:       "empty successful result after tool-using turn returns empty output",
 			scriptBody: toolLastStream + `printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-boundary","result":""}'` + "\n",
 			wantStatus: "completed",
-			wantOutput: emptySuccessfulStreamResult,
+			wantOutput: "",
 			forbiddenOutput: []string{
 				"PRE-TOOL NARRATION",
 				"I WILL USE A TOOL",
