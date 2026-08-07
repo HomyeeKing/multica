@@ -69,6 +69,20 @@ func newFixture(t *testing.T, gateOpen bool) *fixture {
 		f.ws, slug); err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
+	// member is a real boundary now: the lazy migration and the claim both join
+	// it, so a recipient who is not a member of the workspace has no history to
+	// migrate. Seeding user + member is part of representing a real recipient.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO "user" (id, email, name) VALUES ($1, $2, 'inbox v2 tester')`,
+		f.user, "inboxv2-"+uuid.NewString()[:8]+"@example.test"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')`,
+		f.ws, f.user); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+
 	creator := uuidVal(uuid.New())
 	if _, err := pool.Exec(ctx, `
 INSERT INTO issue (id, workspace_id, title, status, priority, creator_type, creator_id, position, number)
@@ -91,7 +105,9 @@ VALUES ($1, $2, 'inbox v2 write path', 'todo', 'medium', 'member', $3, 0, 1)
 		_, _ = pool.Exec(bg, `DELETE FROM inbox_item WHERE workspace_id = $1`, f.ws)
 		_, _ = pool.Exec(bg, `DELETE FROM inbox_group WHERE workspace_id = $1`, f.ws)
 		_, _ = pool.Exec(bg, `DELETE FROM issue WHERE workspace_id = $1`, f.ws)
+		_, _ = pool.Exec(bg, `DELETE FROM member WHERE workspace_id = $1`, f.ws)
 		_, _ = pool.Exec(bg, `DELETE FROM workspace WHERE id = $1`, f.ws)
+		_, _ = pool.Exec(bg, `DELETE FROM "user" WHERE id = $1`, f.user)
 	})
 	return f
 }

@@ -27,7 +27,14 @@ WHERE id = true;
 -- Idempotency probe for a new delivery. Only an optimisation: two concurrent
 -- transactions can both miss it, and inbox_item_delivery_key_uidx is what
 -- actually decides the winner.
-SELECT * FROM inbox_item WHERE delivery_key = @delivery_key;
+--
+-- Scoped by owner, matching the index. Probing on the key alone would find
+-- another tenant's row and report a delivery as already made that this
+-- recipient never received.
+SELECT * FROM inbox_item
+WHERE workspace_id = @workspace_id
+  AND recipient_id = @recipient_id
+  AND delivery_key = @delivery_key;
 
 -- name: AcquireInboxGroup :one
 -- Get-or-create the group and hold its row lock for the rest of the
@@ -163,10 +170,14 @@ WITH survivor AS (
     LIMIT 1
 )
 UPDATE inbox_group g
-SET latest_seq       = COALESCE((SELECT event_seq FROM survivor), 0),
+SET latest_seq       = COALESCE(
+        (SELECT event_seq FROM survivor),
+        (SELECT COALESCE(MIN(inbox_item.event_seq), 1) - 1 FROM inbox_item WHERE inbox_item.group_id = @id)),
     latest_event_id  = (SELECT id FROM survivor),
     latest_event_at  = COALESCE((SELECT created_at FROM survivor), g.latest_event_at),
-    read_through_seq = LEAST(g.read_through_seq, COALESCE((SELECT event_seq FROM survivor), 0)),
+    read_through_seq = LEAST(g.read_through_seq, COALESCE(
+        (SELECT event_seq FROM survivor),
+        (SELECT COALESCE(MIN(inbox_item.event_seq), 1) - 1 FROM inbox_item WHERE inbox_item.group_id = @id))),
     state_version    = g.state_version + 1,
     updated_at       = @now
 WHERE g.id = @id
@@ -200,13 +211,67 @@ RETURNING g.*;
 -- Ordering by (created_at, id): created_at alone is not unique in the legacy
 -- data, and an unstable tie-break would make the numbering non-deterministic
 -- across a retry.
-WITH high_water AS (
-    SELECT COALESCE(MAX(event_seq), 0) AS mark FROM inbox_item WHERE group_id = @group_id
+-- Numbering runs in the direction the row's own timestamp asks for.
+--
+-- Only ONE ordering property actually has to hold: the row with the highest
+-- event_seq must also be the row with the newest created_at. That is the
+-- representative — v2 elects it by sequence, every v1 client elects it by
+-- timestamp, and if the two disagree the same group renders as two different
+-- notifications on two different clients. Interior order is unconstrained,
+-- because nothing reads it.
+--
+-- So each claimed row is placed relative to the group's current head:
+--
+--   older than the head  -> numbered DOWNWARD from below the group's floor
+--   newer than the head  -> numbered UPWARD from the group's high-water mark
+--
+-- Both cases are real. Pre-cutover history is older than anything the group
+-- already holds — including a delivery that arrived first and took seq 1, which
+-- is exactly what the oversized-source downgrade leaves behind for reconcile.
+-- A rollback window instead leaves rows NEWER than everything claimed. A fixed
+-- direction is wrong for one of the two, whichever one it picks.
+--
+-- An empty group has no head, so every row is "newer" and numbering starts at
+-- 1 — the ordinary first-migration case, unchanged.
+--
+-- Sequences are not required to be gapless or positive: every consumer compares
+-- them (cursor against head, representative against latest_seq), none counts
+-- them. That is what lets both directions coexist without renumbering rows that
+-- already exist.
+--
+-- Ordering by (created_at, id): created_at alone is not unique in the legacy
+-- data, and an unstable tie-break would make the numbering non-deterministic
+-- across a retry.
+--
+-- The member join is a boundary, not an optimisation. Leaving a workspace does
+-- not reliably delete the inbox_item rows it produced, so keying the scan on
+-- recipient_id alone would rebuild groups for workspaces the user has left —
+-- and, because the lazy migration is user-level, let that dead history hold
+-- their live workspaces hostage.
+--
+-- Historical rows carry only `archived`, which cannot distinguish "the user
+-- archived this issue" from "the system retired this stale task_failed". The
+-- frozen rule reads the SET rather than the row: if every row of the source is
+-- archived, the whole source was archived and none of it is a dismissal (the
+-- group inherits the archive instead, see SeedInboxGroupArchivedFromHistory);
+-- if only some are, the archived ones are dismissals, because that is the only
+-- shape v1 could have produced them in. Either way what the user can SEE is
+-- unchanged, which is the only property a migration of this data owes them.
+WITH bounds AS (
+    SELECT COALESCE(MIN(inbox_item.event_seq), 1) AS floor_seq,
+           COALESCE(MAX(inbox_item.event_seq), 0) AS high_water,
+           MAX(inbox_item.created_at)             AS head_at
+    FROM inbox_item WHERE inbox_item.group_id = @group_id
 ),
-numbered AS (
-    SELECT id,
-           ROW_NUMBER() OVER (ORDER BY created_at, id) + (SELECT mark FROM high_water) AS seq
+candidate AS (
+    SELECT inbox_item.id,
+           inbox_item.created_at,
+           inbox_item.archived,
+           (SELECT head_at FROM bounds) IS NOT NULL
+             AND inbox_item.created_at <= (SELECT head_at FROM bounds) AS below_head
     FROM inbox_item
+    JOIN member ON member.user_id = inbox_item.recipient_id
+               AND member.workspace_id = inbox_item.workspace_id
     WHERE inbox_item.workspace_id = @workspace_id
       AND inbox_item.recipient_type = 'member'
       AND inbox_item.recipient_id = @recipient_id
@@ -220,12 +285,71 @@ numbered AS (
             -- create have nothing to do with each other.
          OR (@source_kind::text = 'standalone' AND inbox_item.id = @source_id::uuid)
           )
+),
+numbered AS (
+    SELECT candidate.id,
+           candidate.archived,
+           bool_and(candidate.archived) OVER () AS all_archived,
+           CASE WHEN candidate.below_head
+                THEN (SELECT floor_seq FROM bounds) - 1
+                     - COUNT(*) FILTER (WHERE candidate.below_head) OVER ()
+                     + ROW_NUMBER() OVER (PARTITION BY candidate.below_head
+                                          ORDER BY candidate.created_at, candidate.id)
+                ELSE (SELECT high_water FROM bounds)
+                     + ROW_NUMBER() OVER (PARTITION BY candidate.below_head
+                                          ORDER BY candidate.created_at, candidate.id)
+           END AS seq
+    FROM candidate
 )
 UPDATE inbox_item i
-SET group_id  = @group_id,
-    event_seq = numbered.seq
+SET group_id     = @group_id,
+    event_seq    = numbered.seq,
+    dismissed_at = CASE
+        WHEN i.dismissed_at IS NOT NULL THEN i.dismissed_at
+        WHEN numbered.archived AND NOT numbered.all_archived THEN @now
+        ELSE NULL
+    END
 FROM numbered
 WHERE i.id = numbered.id;
+
+-- name: SeedInboxGroupArchivedFromHistory :execrows
+-- The other half of the historical-archive rule above: a source whose every row
+-- was archived becomes an archived GROUP, so unarchiving restores all of it.
+--
+-- Guarded on "no unarchived row exists" rather than on a flag the claim passed
+-- back, which makes it idempotent and safe to run from reconcile as well. It
+-- can never fire during a live delivery: the insert happens after the claim and
+-- is not archived, so the NOT EXISTS fails.
+UPDATE inbox_group g
+SET archived_at   = @now,
+    state_version = g.state_version + 1,
+    updated_at    = @now
+WHERE g.id = @id
+  AND g.archived_at IS NULL
+  AND EXISTS (SELECT 1 FROM inbox_item WHERE inbox_item.group_id = @id)
+  AND NOT EXISTS (SELECT 1 FROM inbox_item WHERE inbox_item.group_id = @id AND inbox_item.archived = false);
+
+-- name: CountUnclaimedInboxItemsForSource :one
+-- Budget check for ONE source, read under the group lock before the write path
+-- decides whether to claim inline.
+--
+-- A first delivery to a long-lived issue would otherwise drag that issue's
+-- entire history through an UPDATE inside the notification transaction, and
+-- then through the mirror refresh a second time. Above the threshold the write
+-- path takes its sequence and leaves the history to reconcile; the group is
+-- immediately correct about its newest event either way, which is all the
+-- delivery itself owes the reader.
+SELECT COUNT(*) FROM inbox_item
+JOIN member ON member.user_id = inbox_item.recipient_id
+           AND member.workspace_id = inbox_item.workspace_id
+WHERE inbox_item.workspace_id = @workspace_id
+  AND inbox_item.recipient_type = 'member'
+  AND inbox_item.recipient_id = @recipient_id
+  AND inbox_item.group_id IS NULL
+  AND (
+        (@source_kind::text = 'issue' AND inbox_item.issue_id = @source_id::uuid)
+     OR (@source_kind::text = 'standalone' AND inbox_item.id = @source_id::uuid)
+      );
 
 -- name: ListUnclaimedInboxSources :many
 -- The sources a person still has unclaimed rows for. One group is created per
@@ -236,21 +360,35 @@ WHERE i.id = numbered.id;
 -- would fold every issue-less notification a person has in a workspace into a
 -- single group, so an autopilot pause and an unrelated quick-create failure
 -- would share one read cursor and one archive state.
+--
+-- Joined to member, so leaving a workspace ends the migration's interest in the
+-- rows it left behind. Without it a user who left a workspace years ago keeps
+-- rebuilding groups there on every v2 request.
 SELECT DISTINCT
-    workspace_id,
-    CASE WHEN issue_id IS NULL THEN 'standalone' ELSE 'issue' END AS source_kind,
-    COALESCE(issue_id, id) AS source_id
+    inbox_item.workspace_id,
+    CASE WHEN inbox_item.issue_id IS NULL THEN 'standalone' ELSE 'issue' END AS source_kind,
+    COALESCE(inbox_item.issue_id, inbox_item.id) AS source_id
 FROM inbox_item
-WHERE recipient_type = 'member'
-  AND recipient_id = @recipient_id
-  AND group_id IS NULL;
+JOIN member ON member.user_id = inbox_item.recipient_id
+           AND member.workspace_id = inbox_item.workspace_id
+WHERE inbox_item.recipient_type = 'member'
+  AND inbox_item.recipient_id = @recipient_id
+  AND inbox_item.group_id IS NULL;
 
 -- name: CountUnclaimedInboxItems :one
 -- Budget check for the lazy migration: above the threshold the request returns
 -- not_ready and the work moves to the background instead of blocking a page
 -- load behind an unbounded scan.
+--
+-- Member-joined for the same reason as the source scan: stale rows in a
+-- workspace the user has left must not count against their budget, or a user
+-- with enough dead history is permanently not_ready and never gets v2 at all.
 SELECT COUNT(*) FROM inbox_item
-WHERE recipient_type = 'member' AND recipient_id = @recipient_id AND group_id IS NULL;
+JOIN member ON member.user_id = inbox_item.recipient_id
+           AND member.workspace_id = inbox_item.workspace_id
+WHERE inbox_item.recipient_type = 'member'
+  AND inbox_item.recipient_id = @recipient_id
+  AND inbox_item.group_id IS NULL;
 
 -- name: NextInboxItemSeqForGroup :one
 -- The next sequence number for a group. Must be called with the group locked.
@@ -278,9 +416,13 @@ SELECT (COALESCE(MAX(event_seq), 0) + 1)::bigint FROM inbox_item WHERE group_id 
 -- first time the group materialises, which is the ghost-unread bug this whole
 -- refactor exists to kill. Starting at 0 would be worse still. manual_unread is
 -- untouched either way: it belongs to the user, not to a migration.
+--
+-- Not clamped at zero: claimed history numbers downward from a ceiling, so a
+-- group's whole sequence range can be negative and a floor of 0 would sit ABOVE
+-- the head and report the group permanently read.
 UPDATE inbox_group g
 SET read_through_seq = CASE WHEN rep.read THEN g.latest_seq
-                            ELSE GREATEST(g.latest_seq - 1, 0) END,
+                            ELSE g.latest_seq - 1 END,
     state_version    = g.state_version + 1,
     updated_at       = @now
 FROM (

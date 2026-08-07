@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,6 +38,21 @@ const (
 
 // uniqueViolation is the SQLSTATE for a unique constraint violation.
 const uniqueViolation = "23505"
+
+// MaxInlineClaim bounds how much history one delivery will migrate inside the
+// notification transaction.
+//
+// A first delivery to an issue that has been running for months would otherwise
+// drag every notification that issue ever produced for this person through an
+// UPDATE — and then through the mirror refresh again — while a user waits for a
+// comment to post. Above the bound the delivery takes its own sequence and
+// leaves the history to reconcile, which numbers it downward from the group's
+// floor and therefore cannot collide with anything already there.
+//
+// The group is correct about its newest event either way. What the delivery
+// defers is only the older rows, which no v2 surface renders anyway: the list
+// shows one representative per group.
+const MaxInlineClaim = 200
 
 // Delivery is one notification for one member, in the shape the write path
 // needs. Producers already hold every field; the legacy write threw most of the
@@ -168,8 +184,21 @@ func (w *Writer) deliverOnce(ctx context.Context, d Delivery, now time.Time) (Re
 		return Result{Item: item}, nil
 	}
 
-	if d.DeliveryKey.Valid && d.DeliveryKey.String != "" {
-		existing, err := q.FindInboxItemByDeliveryKey(ctx, d.DeliveryKey)
+	// A delivery key is mandatory once the gate is open. Idempotency that is
+	// optional is idempotency that a producer can silently omit — and the failure
+	// only shows up as duplicate notifications after a retry in production, on the
+	// one path nobody re-tests. Requiring it here makes the omission a startup-time
+	// error in tests instead.
+	if !d.DeliveryKey.Valid || d.DeliveryKey.String == "" {
+		return Result{}, errors.New("inboxv2: delivery key required once the write gate is open")
+	}
+
+	{
+		existing, err := q.FindInboxItemByDeliveryKey(ctx, db.FindInboxItemByDeliveryKeyParams{
+			WorkspaceID: d.WorkspaceID,
+			RecipientID: d.RecipientID,
+			DeliveryKey: d.DeliveryKey,
+		})
 		if err == nil {
 			group, gerr := q.GetInboxGroupForRecipient(ctx, db.GetInboxGroupForRecipientParams{
 				ID:          existing.GroupID,
@@ -209,15 +238,37 @@ func (w *Writer) deliverOnce(ctx context.Context, d Delivery, now time.Time) (Re
 	// timestamp agree about which row represents the group. Claiming afterwards
 	// would either collide on inbox_item_group_seq_uidx or hand an older row a
 	// higher number than a newer one.
-	claimed, err := q.ClaimInboxItemsForSource(ctx, db.ClaimInboxItemsForSourceParams{
+	pending, err := q.CountUnclaimedInboxItemsForSource(ctx, db.CountUnclaimedInboxItemsForSourceParams{
 		WorkspaceID: d.WorkspaceID,
 		RecipientID: d.RecipientID,
 		SourceKind:  string(d.SourceKind),
 		SourceID:    d.SourceID,
-		GroupID:     group.ID,
 	})
 	if err != nil {
-		return Result{}, fmt.Errorf("inboxv2: claim history: %w", err)
+		return Result{}, fmt.Errorf("inboxv2: count unclaimed: %w", err)
+	}
+
+	var claimed int64
+	if pending > MaxInlineClaim {
+		// Deferred, not skipped: reconcile numbers this history below the group's
+		// floor, so the ordering it lands in is the same one it would have had
+		// inline. Logged because a source over the bound is a real signal about the
+		// shape of the data, not a routine event.
+		slog.Info("inboxv2: deferring oversized history claim to reconcile",
+			"workspace_id", d.WorkspaceID, "recipient_id", d.RecipientID,
+			"source_kind", d.SourceKind, "pending", pending, "bound", MaxInlineClaim)
+	} else if pending > 0 {
+		claimed, err = q.ClaimInboxItemsForSource(ctx, db.ClaimInboxItemsForSourceParams{
+			WorkspaceID: d.WorkspaceID,
+			RecipientID: d.RecipientID,
+			SourceKind:  string(d.SourceKind),
+			SourceID:    d.SourceID,
+			GroupID:     group.ID,
+			Now:         pgtype.Timestamptz{Time: now, Valid: true},
+		})
+		if err != nil {
+			return Result{}, fmt.Errorf("inboxv2: claim history: %w", err)
+		}
 	}
 	if claimed > 0 {
 		// The claimed rows advanced the group's head; recompute from the rows
@@ -239,6 +290,18 @@ func (w *Writer) deliverOnce(ctx context.Context, d Delivery, now time.Time) (Re
 		})
 		if err != nil {
 			return Result{}, fmt.Errorf("inboxv2: seed cursor: %w", err)
+		}
+		// A source whose every historical row was archived was archived as a whole
+		// under v1, so the group inherits that rather than the rows carrying it as
+		// individual dismissals. The delivery below then unarchives the group,
+		// which is the correct "archive is not unsubscribe" behaviour — but the
+		// group has to pass THROUGH the archived state for a later unarchive to
+		// restore the right thing.
+		if _, err := q.SeedInboxGroupArchivedFromHistory(ctx, db.SeedInboxGroupArchivedFromHistoryParams{
+			ID:  group.ID,
+			Now: pgtype.Timestamptz{Time: now, Valid: true},
+		}); err != nil {
+			return Result{}, fmt.Errorf("inboxv2: seed archived: %w", err)
 		}
 	}
 
@@ -314,7 +377,11 @@ func monotonicCreatedAt(now time.Time, previous pgtype.Timestamptz) time.Time {
 }
 
 func (w *Writer) loadExisting(ctx context.Context, d Delivery) (Result, error) {
-	item, err := w.q.FindInboxItemByDeliveryKey(ctx, d.DeliveryKey)
+	item, err := w.q.FindInboxItemByDeliveryKey(ctx, db.FindInboxItemByDeliveryKeyParams{
+		WorkspaceID: d.WorkspaceID,
+		RecipientID: d.RecipientID,
+		DeliveryKey: d.DeliveryKey,
+	})
 	if err != nil {
 		return Result{}, fmt.Errorf("inboxv2: reload after conflict: %w", err)
 	}

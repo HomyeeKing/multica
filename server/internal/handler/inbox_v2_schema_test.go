@@ -31,10 +31,15 @@ func inboxV2Workspace(t *testing.T) string {
 
 func insertLegacyItem(t *testing.T, workspaceID string, deliveryKey *string) error {
 	t.Helper()
+	return insertLegacyItemFor(t, workspaceID, uuid.NewString(), deliveryKey)
+}
+
+func insertLegacyItemFor(t *testing.T, workspaceID, recipientID string, deliveryKey *string) error {
+	t.Helper()
 	_, err := testPool.Exec(context.Background(), `
 INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title, delivery_key)
-VALUES ($1, 'member', gen_random_uuid(), 'new_comment', 'schema test', $2)
-`, workspaceID, deliveryKey)
+VALUES ($1, 'member', $2, 'new_comment', 'schema test', $3)
+`, workspaceID, recipientID, deliveryKey)
 	return err
 }
 
@@ -78,7 +83,7 @@ WHERE table_name = 'inbox_item'
 
 // delivery_key deduplicates new deliveries without touching history: legacy
 // rows all carry NULL and must remain insertable alongside each other, while a
-// repeated key must collide.
+// repeated key for the SAME recipient must collide.
 func TestInboxItemDeliveryKeyUniqueOnlyForNewRows(t *testing.T) {
 	if testPool == nil {
 		t.Skip("database not available")
@@ -93,15 +98,45 @@ func TestInboxItemDeliveryKeyUniqueOnlyForNewRows(t *testing.T) {
 	}
 
 	key := "v1:" + uuid.NewString()
-	if err := insertLegacyItem(t, ws, &key); err != nil {
+	recipient := uuid.NewString()
+	if err := insertLegacyItemFor(t, ws, recipient, &key); err != nil {
 		t.Fatalf("first keyed row: %v", err)
 	}
-	err := insertLegacyItem(t, ws, &key)
+	err := insertLegacyItemFor(t, ws, recipient, &key)
 	if err == nil {
-		t.Fatal("a repeated delivery_key must be rejected")
+		t.Fatal("a repeated delivery_key must be rejected for the same recipient")
 	}
 	if !strings.Contains(err.Error(), "inbox_item_delivery_key_uidx") {
 		t.Fatalf("expected the delivery-key index to reject it, got: %v", err)
+	}
+}
+
+// The uniqueness scope is (workspace, recipient, key), not the key alone.
+//
+// A global key makes correctness depend on every producer remembering to fold
+// the recipient into the string it builds. One that forgets — and
+// "issue:<id>:comment:<id>" is the obvious shape to reach for — does not
+// produce a duplicate, it produces a MISSING notification: the second
+// recipient's insert collides with the first recipient's row and is dropped.
+// Scoping the constraint means a producer can only ever deduplicate a person
+// against themselves.
+func TestInboxItemDeliveryKeyIsScopedToTheRecipient(t *testing.T) {
+	if testPool == nil {
+		t.Skip("database not available")
+	}
+	ws := inboxV2Workspace(t)
+	key := "v1:" + uuid.NewString()
+
+	if err := insertLegacyItemFor(t, ws, uuid.NewString(), &key); err != nil {
+		t.Fatalf("first recipient: %v", err)
+	}
+	if err := insertLegacyItemFor(t, ws, uuid.NewString(), &key); err != nil {
+		t.Fatalf("a second recipient must still receive their own copy: %v", err)
+	}
+
+	other := inboxV2Workspace(t)
+	if err := insertLegacyItemFor(t, other, uuid.NewString(), &key); err != nil {
+		t.Fatalf("another tenant must not collide on the same key: %v", err)
 	}
 }
 

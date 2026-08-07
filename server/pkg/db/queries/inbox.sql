@@ -113,8 +113,13 @@ WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND issue_
 -- The returned set is still only the rows that were ACTIVE before the stamp, so
 -- the websocket fan-out keeps notifying exactly the recipients whose visible
 -- inbox actually changed.
+--
+-- group_id rides along because dismissing a row can retire the group's
+-- representative, and the caller has to recompute the pointers in this same
+-- transaction. A dismissal that leaves the group pointing at the dismissed row
+-- is invisible while the write gate is closed and wrong the moment it opens.
 WITH previously_active AS (
-    SELECT inbox_item.recipient_type, inbox_item.recipient_id
+    SELECT inbox_item.recipient_type, inbox_item.recipient_id, inbox_item.group_id
     FROM inbox_item
     WHERE inbox_item.workspace_id = $1 AND inbox_item.issue_id = $2
       AND inbox_item.type = $3 AND inbox_item.archived = false
@@ -124,9 +129,11 @@ stamped AS (
     SET archived = true, dismissed_at = now()
     WHERE inbox_item.workspace_id = $1 AND inbox_item.issue_id = $2
       AND inbox_item.type = $3 AND inbox_item.dismissed_at IS NULL
-    RETURNING 1
+    RETURNING inbox_item.group_id
 )
-SELECT recipient_type, recipient_id FROM previously_active;
+SELECT recipient_type, recipient_id,
+       ARRAY(SELECT DISTINCT group_id FROM stamped WHERE group_id IS NOT NULL)::uuid[] AS touched_group_ids
+FROM previously_active;
 
 -- name: CountUnreadInbox :one
 SELECT count(*) FROM inbox_item

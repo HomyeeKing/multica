@@ -93,7 +93,7 @@ func (q *Queries) ArchiveInboxByIssue(ctx context.Context, arg ArchiveInboxByIss
 
 const archiveInboxByIssueAndType = `-- name: ArchiveInboxByIssueAndType :many
 WITH previously_active AS (
-    SELECT inbox_item.recipient_type, inbox_item.recipient_id
+    SELECT inbox_item.recipient_type, inbox_item.recipient_id, inbox_item.group_id
     FROM inbox_item
     WHERE inbox_item.workspace_id = $1 AND inbox_item.issue_id = $2
       AND inbox_item.type = $3 AND inbox_item.archived = false
@@ -103,9 +103,11 @@ stamped AS (
     SET archived = true, dismissed_at = now()
     WHERE inbox_item.workspace_id = $1 AND inbox_item.issue_id = $2
       AND inbox_item.type = $3 AND inbox_item.dismissed_at IS NULL
-    RETURNING 1
+    RETURNING inbox_item.group_id
 )
-SELECT recipient_type, recipient_id FROM previously_active
+SELECT recipient_type, recipient_id,
+       ARRAY(SELECT DISTINCT group_id FROM stamped WHERE group_id IS NOT NULL)::uuid[] AS touched_group_ids
+FROM previously_active
 `
 
 type ArchiveInboxByIssueAndTypeParams struct {
@@ -115,8 +117,9 @@ type ArchiveInboxByIssueAndTypeParams struct {
 }
 
 type ArchiveInboxByIssueAndTypeRow struct {
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
+	RecipientType   string        `json:"recipient_type"`
+	RecipientID     pgtype.UUID   `json:"recipient_id"`
+	TouchedGroupIds []pgtype.UUID `json:"touched_group_ids"`
 }
 
 // Event-level dismissal: an issue reached a terminal status, so its stale
@@ -136,6 +139,11 @@ type ArchiveInboxByIssueAndTypeRow struct {
 // The returned set is still only the rows that were ACTIVE before the stamp, so
 // the websocket fan-out keeps notifying exactly the recipients whose visible
 // inbox actually changed.
+//
+// group_id rides along because dismissing a row can retire the group's
+// representative, and the caller has to recompute the pointers in this same
+// transaction. A dismissal that leaves the group pointing at the dismissed row
+// is invisible while the write gate is closed and wrong the moment it opens.
 func (q *Queries) ArchiveInboxByIssueAndType(ctx context.Context, arg ArchiveInboxByIssueAndTypeParams) ([]ArchiveInboxByIssueAndTypeRow, error) {
 	rows, err := q.db.Query(ctx, archiveInboxByIssueAndType, arg.WorkspaceID, arg.IssueID, arg.Type)
 	if err != nil {
@@ -145,7 +153,7 @@ func (q *Queries) ArchiveInboxByIssueAndType(ctx context.Context, arg ArchiveInb
 	items := []ArchiveInboxByIssueAndTypeRow{}
 	for rows.Next() {
 		var i ArchiveInboxByIssueAndTypeRow
-		if err := rows.Scan(&i.RecipientType, &i.RecipientID); err != nil {
+		if err := rows.Scan(&i.RecipientType, &i.RecipientID, &i.TouchedGroupIds); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
