@@ -64,6 +64,9 @@ vi.mock("@tanstack/react-query", async () => {
     );
   return {
     ...actual,
+    // The page reads the client only to invalidate the dashboard keys from
+    // the refresh button; there is no provider in these renders.
+    useQueryClient: () => ({ invalidateQueries: vi.fn() }),
     useQuery: (opts: { queryKey: unknown[] }) => {
       queryKeys.push(opts.queryKey);
       if (dashboardDataRef.current) {
@@ -616,16 +619,6 @@ describe("DashboardPage — the two questions are separate tabs", () => {
     renderDashboard("tab=nonsense");
 
     expect(screen.getByRole("list", { name: "Leaderboard" })).toBeInTheDocument();
-  });
-
-  it("carries the failure count on the tab so a hidden view is not a silent one", () => {
-    // Without the count, "nothing broke" and "you didn't look" are the same
-    // thing from the Usage tab — which would be worse than the buried card
-    // this split replaced.
-    renderDashboard();
-
-    const errorsTab = screen.getByRole("tab", { name: /Errors/ });
-    expect(within(errorsTab).getByText("4")).toBeInTheDocument();
   });
 
   it("caps the offender list and expands it on demand", async () => {

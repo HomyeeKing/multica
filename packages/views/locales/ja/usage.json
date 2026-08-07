@@ -1,16 +1,15 @@
 {
-  "title": "使用量",
+  "title": "分析",
+  "tab_usage": "使用量",
   "subtitle": "このワークスペース全体のトークン消費とエージェントの活動です。",
   "header": {
-    "timezone_and_updated": "{{tz}} · {{time}} 更新"
+    "timezone_and_updated": "{{tz}} · {{time}} 更新",
+    "refresh": "更新"
   },
   "filter": {
     "project_label": "プロジェクト",
     "all_projects": "すべてのプロジェクト",
-    "period_label": "期間",
-    "filter_label": "フィルター",
-    "active_count": "フィルター · {{count}}",
-    "clear": "フィルターを解除"
+    "period_label": "期間"
   },
   "kpi": {
     "cost_label": "コスト · {{days}}日",

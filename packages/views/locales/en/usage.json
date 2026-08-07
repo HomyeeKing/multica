@@ -1,16 +1,15 @@
 {
-  "title": "Usage",
+  "title": "Analytics",
+  "tab_usage": "Usage",
   "subtitle": "Token spend and agent activity across this workspace.",
   "header": {
-    "timezone_and_updated": "{{tz}} · updated {{time}}"
+    "timezone_and_updated": "{{tz}} · updated {{time}}",
+    "refresh": "Refresh"
   },
   "filter": {
     "project_label": "Project",
     "all_projects": "All projects",
-    "period_label": "Period",
-    "filter_label": "Filter",
-    "active_count": "Filter · {{count}}",
-    "clear": "Clear filter"
+    "period_label": "Period"
   },
   "kpi": {
     "cost_label": "Cost · {{days}}D",

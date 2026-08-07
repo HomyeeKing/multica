@@ -1,16 +1,15 @@
 {
-  "title": "用量",
+  "title": "统计",
+  "tab_usage": "用量",
   "subtitle": "查看当前 Workspace 的 token 消耗和智能体运行情况。",
   "header": {
-    "timezone_and_updated": "{{tz}} · 更新于 {{time}}"
+    "timezone_and_updated": "{{tz}} · 更新于 {{time}}",
+    "refresh": "刷新"
   },
   "filter": {
     "project_label": "项目",
     "all_projects": "全部项目",
-    "period_label": "时间范围",
-    "filter_label": "筛选",
-    "active_count": "筛选 · {{count}}",
-    "clear": "清除筛选"
+    "period_label": "时间范围"
   },
   "kpi": {
     "cost_label": "费用 · {{days}}天",

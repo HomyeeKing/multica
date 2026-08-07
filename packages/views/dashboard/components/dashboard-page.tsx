@@ -1,10 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { BarChart3 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { BarChart3, RefreshCw } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { Badge } from "@multica/ui/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import {
   CompactNumberFlow,
@@ -16,6 +16,7 @@ import type { Agent } from "@multica/core/types";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import {
+  dashboardKeys,
   dashboardUsageDailyOptions,
   dashboardUsageByAgentOptions,
   dashboardAgentRunTimeOptions,
@@ -61,7 +62,7 @@ import {
   dimsForDays,
   type TimeRange,
 } from "./dashboard-shared";
-import { DashboardFilterMenu, TimeRangeFilter } from "./dashboard-filters";
+import { ProjectFilter, TimeRangeFilter } from "./dashboard-filters";
 import { UsageTrendCard } from "./usage-trend-card";
 import { Leaderboard } from "./leaderboard";
 import { ErrorsTab } from "./errors-tab";
@@ -134,11 +135,12 @@ function useDataFreshness(
  * where the failure breakdown sat below a leaderboard that could itself run to
  * thirty rows, and the only way to chart failures was to hide spend.
  *
- * Scope is expressed by where a control lives: the header carries the two
- * page-scoped filters (time range, project), every card carries its own
- * view switches. All six rollups are fetched for both tabs — they are small,
- * and prefetching is what makes switching tabs instant — but the loading and
- * empty states are per tab, so Usage does not wait on the failure queries.
+ * Scope is expressed by where a control lives: the toolbar under the header
+ * carries the tabs and the two page-scoped filters (time range, project),
+ * every card carries its own view switches. All six rollups are fetched for
+ * both tabs — they are small, and prefetching is what makes switching tabs
+ * instant — but the loading and empty states are per tab, so Usage does not
+ * wait on the failure queries.
  *
  * Cost math runs client-side via the runtimes utils — keeps the dashboard
  * and the runtime page using one pricing table.
@@ -233,6 +235,21 @@ export function DashboardPage() {
   const runTimeDailyRows = runTimeDailyQuery.data ?? EMPTY_RUNTIME_DAILY;
   const failureDailyRows = failuresDailyQuery.data ?? EMPTY_FAILURE_DAILY;
   const failureByAgentRows = failuresByAgentQuery.data ?? EMPTY_FAILURE_BY_AGENT;
+
+  const queryClient = useQueryClient();
+  // "Refreshing" covers any of the six rollups being in flight, whichever
+  // trigger started it (button, interval, mount) — the header spinner and the
+  // timestamp describe the same set of queries.
+  const isRefreshing =
+    dailyQuery.isFetching ||
+    byAgentQuery.isFetching ||
+    runTimeQuery.isFetching ||
+    runTimeDailyQuery.isFetching ||
+    failuresDailyQuery.isFetching ||
+    failuresByAgentQuery.isFetching;
+  const handleRefresh = () => {
+    void queryClient.invalidateQueries({ queryKey: dashboardKeys.all(wsId) });
+  };
 
   const { tzLabel, updatedLabel } = useDataFreshness(
     [
@@ -446,37 +463,12 @@ export function DashboardPage() {
       <PageHeader className="justify-between gap-2 px-5">
         <div className="flex min-w-0 items-center gap-2">
           <BarChart3 className="h-4 w-4 shrink-0 text-muted-foreground" />
-          {/* The tabs are the page's visible title — an "Usage" heading beside
-              a "Usage" tab is the same word twice. The h1 stays for screen
-              readers and for anything that builds a document outline. */}
-          <h1 className="sr-only">{t(($) => $.title)}</h1>
-          <TabsList
-            variant="line"
-            className="gap-0 p-0 group-data-horizontal/tabs:h-full"
-          >
-            <TabsTrigger
-              value="usage"
-              className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
-            >
-              {t(($) => $.title)}
-            </TabsTrigger>
-            <TabsTrigger
-              value="errors"
-              className="h-full gap-1.5 rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
-            >
-              {t(($) => $.errors.title)}
-              {/* The count is the whole reason the split is safe: hiding
-                  failures behind a tab would otherwise make "nothing broke"
-                  and "you didn't look" identical from the Usage tab. */}
-              {!errorsLoading && failureTotals.failed > 0 ? (
-                <Badge variant="destructive" className="h-4 px-1.5 text-micro tabular-nums">
-                  {failureTotals.failed}
-                </Badge>
-              ) : null}
-            </TabsTrigger>
-          </TabsList>
+          <h1 className="text-body font-medium">{t(($) => $.title)}</h1>
         </div>
-        <div className="flex items-center gap-2">
+        {/* Data freshness cluster: the timestamp and the action that advances
+            it stay together. Refresh re-pulls the same scope, so it lives here
+            with the page metadata rather than among the scope controls. */}
+        <div className="flex shrink-0 items-center gap-1">
           {tzLabel ? (
             <span className="hidden text-caption text-muted-foreground lg:inline">
               {updatedLabel
@@ -487,14 +479,48 @@ export function DashboardPage() {
                 : tzLabel}
             </span>
           ) : null}
-          <TimeRangeFilter days={days} onChange={setDays} />
-          <DashboardFilterMenu
-            projects={projects}
-            projectValue={projectValue}
-            onProjectChange={setProjectValue}
-          />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t(($) => $.header.refresh)}
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+          >
+            <RefreshCw className={isRefreshing ? "animate-spin" : undefined} />
+          </Button>
         </div>
       </PageHeader>
+
+      {/* View toolbar, same grammar as the issues surface header: view
+          switching on the left, page-scoped filters on the right. Both tabs
+          share the range and project filter, which is why the filters live
+          here and not inside a tab. */}
+      <div className="h-12 shrink-0 overflow-x-auto border-b px-5 [-webkit-overflow-scrolling:touch]">
+        <div className="flex h-full w-max min-w-full items-center justify-between gap-2">
+          <TabsList variant="line" className="gap-0 p-0 group-data-horizontal/tabs:h-full">
+            <TabsTrigger
+              value="usage"
+              className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
+            >
+              {t(($) => $.tab_usage)}
+            </TabsTrigger>
+            <TabsTrigger
+              value="errors"
+              className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
+            >
+              {t(($) => $.errors.title)}
+            </TabsTrigger>
+          </TabsList>
+          <div className="flex shrink-0 items-center gap-2">
+            <TimeRangeFilter days={days} onChange={setDays} />
+            <ProjectFilter
+              projects={projects}
+              projectValue={projectValue}
+              onProjectChange={setProjectValue}
+            />
+          </div>
+        </div>
+      </div>
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl p-6">

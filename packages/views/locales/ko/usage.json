@@ -1,16 +1,15 @@
 {
-  "title": "사용량",
+  "title": "분석",
+  "tab_usage": "사용량",
   "subtitle": "이 워크스페이스의 토큰 비용과 에이전트 활동입니다.",
   "header": {
-    "timezone_and_updated": "{{tz}} · {{time}} 업데이트"
+    "timezone_and_updated": "{{tz}} · {{time}} 업데이트",
+    "refresh": "새로고침"
   },
   "filter": {
     "project_label": "프로젝트",
     "all_projects": "모든 프로젝트",
-    "period_label": "기간",
-    "filter_label": "필터",
-    "active_count": "필터 · {{count}}",
-    "clear": "필터 지우기"
+    "period_label": "기간"
   },
   "kpi": {
     "cost_label": "비용 · {{days}}일",
