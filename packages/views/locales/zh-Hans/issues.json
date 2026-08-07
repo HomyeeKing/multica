@@ -665,7 +665,17 @@
     "edit_title": "编辑视图",
     "update": "保存修改",
     "toast_updated": "视图已更新",
-    "toast_conflict": "视图已被他人修改，请重新打开后再试"
+    "toast_conflict": "视图已被他人修改，请重新打开后再试",
+    "hint_workspace_members": "基于工作区中成员负责的 issues 创建",
+    "hint_workspace_agents": "基于工作区中智能体负责的 issues 创建",
+    "scope_label": "范围",
+    "variant_all": "全部",
+    "variant_members": "仅成员",
+    "variant_agents": "仅智能体",
+    "variant_my_any": "全部",
+    "variant_my_assigned": "分配给我",
+    "variant_my_created": "我创建的",
+    "variant_my_involved": "我参与的"
   },
   "view_selector": {
     "trigger": "视图",

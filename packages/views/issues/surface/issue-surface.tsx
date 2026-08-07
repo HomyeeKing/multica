@@ -94,13 +94,21 @@ export function IssueSurface({
     () => (activeView ? baselineFromQuery(activeView.query) : null),
     [activeView],
   );
-  // The workspace tabs' coarse assignee-type filter must not leak into an
-  // open view: the same shared view has to return the same rows no matter
-  // which tab the user stood on when opening it. The tabs are already
-  // dimmed while a view is active — this makes the query match the UI.
+  // While a view is open the workspace scope's assignee-type axis belongs
+  // to the VIEW, not to whichever tab the user stood on: the view's own
+  // scope_variant applies (saved from the tab, switchable in the edit
+  // dialog); a variant-free view resolves to the unrestricted "all".
   const effectiveScope: IssueScope =
-    activeView && scope.type === "workspace" && scope.actorKind !== "all"
-      ? { ...scope, actorKind: "all" }
+    activeView && scope.type === "workspace"
+      ? {
+          ...scope,
+          actorKind:
+            activeView.scope_variant === "members"
+              ? "members"
+              : activeView.scope_variant === "agents"
+                ? "agents"
+                : "all",
+        }
       : scope;
   const store = useMemo(() => {
     // First-open seeding happens HERE, at store-creation time for this key:

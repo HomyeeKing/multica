@@ -665,7 +665,17 @@
     "edit_title": "ビューを編集",
     "update": "変更を保存",
     "toast_updated": "ビューを更新しました",
-    "toast_conflict": "他のユーザーがこのビューを編集しました。開き直してから再試行してください"
+    "toast_conflict": "他のユーザーがこのビューを編集しました。開き直してから再試行してください",
+    "hint_workspace_members": "メンバーが担当するワークスペースの issue をもとに作成",
+    "hint_workspace_agents": "エージェントが担当するワークスペースの issue をもとに作成",
+    "scope_label": "範囲",
+    "variant_all": "すべて",
+    "variant_members": "メンバーのみ",
+    "variant_agents": "エージェントのみ",
+    "variant_my_any": "すべて",
+    "variant_my_assigned": "自分に割り当て",
+    "variant_my_created": "自分が作成",
+    "variant_my_involved": "関与中"
   },
   "view_selector": {
     "trigger": "ビュー",

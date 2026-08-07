@@ -1095,7 +1095,11 @@ export function IssuesHeader({
       <SaveViewDialog
         open={saveViewOpen}
         onOpenChange={setSaveViewOpen}
-        scope={saveViewScope}
+        scope={
+          saveViewScope.kind === "workspace"
+            ? { ...saveViewScope, actorKind: scope }
+            : saveViewScope
+        }
         editView={editTarget?.view ?? null}
         seedFromDefinition={editTarget?.fromDefinition ?? false}
       />

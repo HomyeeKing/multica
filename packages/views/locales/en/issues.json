@@ -690,7 +690,17 @@
     "edit_title": "Edit view",
     "update": "Save changes",
     "toast_updated": "View updated",
-    "toast_conflict": "Someone else edited this view — reopen it and try again"
+    "toast_conflict": "Someone else edited this view — reopen it and try again",
+    "hint_workspace_members": "Based on workspace issues assigned to members",
+    "hint_workspace_agents": "Based on workspace issues assigned to agents",
+    "scope_label": "Scope",
+    "variant_all": "All",
+    "variant_members": "Members only",
+    "variant_agents": "Agents only",
+    "variant_my_any": "All",
+    "variant_my_assigned": "Assigned to me",
+    "variant_my_created": "Created by me",
+    "variant_my_involved": "Involved"
   },
   "view_selector": {
     "trigger": "Views",

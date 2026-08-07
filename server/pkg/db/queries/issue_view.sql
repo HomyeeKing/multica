@@ -30,11 +30,12 @@ WHERE id = $1 AND workspace_id = $2;
 UPDATE issue_view SET
     name = $3,
     visibility = $4,
-    query = $5,
-    display = $6,
+    scope_variant = $5,
+    query = $6,
+    display = $7,
     revision = revision + 1,
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND revision = $7
+WHERE id = $1 AND workspace_id = $2 AND revision = $8
 RETURNING *;
 
 -- name: DeleteIssueView :one

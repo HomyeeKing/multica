@@ -198,22 +198,24 @@ const updateIssueView = `-- name: UpdateIssueView :one
 UPDATE issue_view SET
     name = $3,
     visibility = $4,
-    query = $5,
-    display = $6,
+    scope_variant = $5,
+    query = $6,
+    display = $7,
     revision = revision + 1,
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND revision = $7
+WHERE id = $1 AND workspace_id = $2 AND revision = $8
 RETURNING id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at
 `
 
 type UpdateIssueViewParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Name        string      `json:"name"`
-	Visibility  string      `json:"visibility"`
-	Query       []byte      `json:"query"`
-	Display     []byte      `json:"display"`
-	Revision    int32       `json:"revision"`
+	ID           pgtype.UUID `json:"id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	Name         string      `json:"name"`
+	Visibility   string      `json:"visibility"`
+	ScopeVariant pgtype.Text `json:"scope_variant"`
+	Query        []byte      `json:"query"`
+	Display      []byte      `json:"display"`
+	Revision     int32       `json:"revision"`
 }
 
 // Optimistic concurrency: the row only updates when the caller's revision
@@ -225,6 +227,7 @@ func (q *Queries) UpdateIssueView(ctx context.Context, arg UpdateIssueViewParams
 		arg.WorkspaceID,
 		arg.Name,
 		arg.Visibility,
+		arg.ScopeVariant,
 		arg.Query,
 		arg.Display,
 		arg.Revision,

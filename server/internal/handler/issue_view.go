@@ -21,10 +21,38 @@ import (
 const issueViewNameMaxLen = 80
 
 var (
-	validIssueViewScopeTypes   = []string{"workspace", "my", "project"}
-	validIssueViewVariants     = []string{"assigned", "created", "involved", "any"}
-	validIssueViewVisibilities = []string{"private", "workspace"}
+	validIssueViewScopeTypes        = []string{"workspace", "my", "project"}
+	validIssueViewMyVariants        = []string{"assigned", "created", "involved", "any"}
+	validIssueViewWorkspaceVariants = []string{"members", "agents"}
+	validIssueViewVisibilities      = []string{"private", "workspace"}
 )
+
+// validateIssueViewVariant returns the pgtype value for a scope_variant
+// input under the given scope_type, or ok=false when the pairing is
+// invalid. Workspace variants are optional (NULL = the unrestricted All
+// tab); my variants are required; project views carry none.
+func validateIssueViewVariant(scopeType string, variant *string) (pgtype.Text, bool) {
+	switch scopeType {
+	case "my":
+		if variant == nil || !contains(validIssueViewMyVariants, *variant) {
+			return pgtype.Text{}, false
+		}
+		return pgtype.Text{String: *variant, Valid: true}, true
+	case "workspace":
+		if variant == nil || *variant == "" || *variant == "all" {
+			return pgtype.Text{}, true
+		}
+		if !contains(validIssueViewWorkspaceVariants, *variant) {
+			return pgtype.Text{}, false
+		}
+		return pgtype.Text{String: *variant, Valid: true}, true
+	default: // project
+		if variant != nil && *variant != "" {
+			return pgtype.Text{}, false
+		}
+		return pgtype.Text{}, true
+	}
+}
 
 type IssueViewResponse struct {
 	ID                string          `json:"id"`
@@ -144,8 +172,12 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	scopeVariant, variantOK := validateIssueViewVariant(req.ScopeType, req.ScopeVariant)
+	if !variantOK {
+		writeError(w, http.StatusBadRequest, "invalid scope_variant for this scope_type")
+		return
+	}
 	var scopeID pgtype.UUID
-	var scopeVariant pgtype.Text
 	switch req.ScopeType {
 	case "project":
 		if req.ScopeID == nil {
@@ -166,11 +198,6 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 		}
 		scopeID = projUUID
 	case "my":
-		if req.ScopeVariant == nil || !contains(validIssueViewVariants, *req.ScopeVariant) {
-			writeError(w, http.StatusBadRequest, "invalid scope_variant for my views")
-			return
-		}
-		scopeVariant = pgtype.Text{String: *req.ScopeVariant, Valid: true}
 		// My Issues is a per-user perspective; sharing it is meaningless.
 		req.Visibility = "private"
 	}
@@ -298,6 +325,7 @@ func (h *Handler) canManageIssueView(r *http.Request, view db.IssueView, userID 
 type UpdateIssueViewRequest struct {
 	Name             *string         `json:"name"`
 	Visibility       *string         `json:"visibility"`
+	ScopeVariant     *string         `json:"scope_variant"`
 	Query            json.RawMessage `json:"query"`
 	Display          json.RawMessage `json:"display"`
 	ExpectedRevision int32           `json:"expected_revision"`
@@ -366,15 +394,26 @@ func (h *Handler) UpdateIssueView(w http.ResponseWriter, r *http.Request) {
 		}
 		display = req.Display
 	}
+	// scope_type itself is immutable; the variant within it may switch.
+	scopeVariant := view.ScopeVariant
+	if req.ScopeVariant != nil {
+		next, variantOK := validateIssueViewVariant(view.ScopeType, req.ScopeVariant)
+		if !variantOK {
+			writeError(w, http.StatusBadRequest, "invalid scope_variant for this scope_type")
+			return
+		}
+		scopeVariant = next
+	}
 
 	updated, err := h.Queries.UpdateIssueView(r.Context(), db.UpdateIssueViewParams{
-		ID:          view.ID,
-		WorkspaceID: wsUUID,
-		Name:        name,
-		Visibility:  visibility,
-		Query:       query,
-		Display:     display,
-		Revision:    req.ExpectedRevision,
+		ID:           view.ID,
+		WorkspaceID:  wsUUID,
+		Name:         name,
+		Visibility:   visibility,
+		ScopeVariant: scopeVariant,
+		Query:        query,
+		Display:      display,
+		Revision:     req.ExpectedRevision,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

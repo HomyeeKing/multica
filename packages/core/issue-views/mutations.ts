@@ -19,6 +19,7 @@ export interface UpdateIssueViewInput {
   id: string;
   name?: string;
   visibility?: "private" | "workspace";
+  scope_variant?: string | null;
   query?: Record<string, unknown>;
   display?: Record<string, unknown>;
   expected_revision: number;

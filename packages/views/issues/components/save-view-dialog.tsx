@@ -33,7 +33,7 @@ import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCreateIssueView, useUpdateIssueView } from "@multica/core/issue-views/mutations";
 import { ApiError } from "@multica/core/api/client";
-import type { IssueView } from "@multica/core/api/schemas";
+import type { CreateIssueViewRequest, IssueView } from "@multica/core/api/schemas";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { propertyListOptions } from "@multica/core/properties";
 import {
@@ -62,9 +62,25 @@ import { useT } from "../../i18n";
 /** Where the view being saved will live. Decided by the hosting surface, not
  *  by the user — the dialog only explains it. */
 export type SaveViewScope =
-  | { kind: "workspace" }
+  | { kind: "workspace"; actorKind?: "all" | "members" | "agents" }
   | { kind: "my"; variant: "any" | "assigned" | "created" | "involved" }
   | { kind: "project"; projectId: string };
+
+const WORKSPACE_VARIANTS = ["all", "members", "agents"] as const;
+const MY_VARIANTS = ["any", "assigned", "created", "involved"] as const;
+type ScopeVariantValue =
+  | (typeof WORKSPACE_VARIANTS)[number]
+  | (typeof MY_VARIANTS)[number];
+
+const VARIANT_LABEL_KEY = {
+  all: "variant_all",
+  members: "variant_members",
+  agents: "variant_agents",
+  any: "variant_my_any",
+  assigned: "variant_my_assigned",
+  created: "variant_my_created",
+  involved: "variant_my_involved",
+} as const;
 
 const MY_VARIANT_HINT_KEY = {
   any: "hint_my_any",
@@ -421,6 +437,10 @@ export function SaveViewDialog({
   const [nameError, setNameError] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const [visibility, setVisibility] = useState<"private" | "workspace">("private");
+  // Scope-layer variant (the "which tab" axis). Defaults to the tab the
+  // user stood on when saving; switchable here because the dialog IS the
+  // view-definition editor. scope_type itself never switches.
+  const [variant, setVariant] = useState<ScopeVariantValue>("all");
   const [draftStore, setDraftStore] = useState<StoreApi<IssueViewState> | null>(null);
 
   // Fresh draft per open: seed a private store instance from the live
@@ -446,7 +466,24 @@ export function SaveViewDialog({
     setName(editView?.name ?? "");
     setNameError(false);
     setVisibility(editView?.visibility === "workspace" ? "workspace" : "private");
-  }, [open, liveStore, editView, seedFromDefinition]);
+    if (scope.kind === "workspace") {
+      const fromEdit = editView?.scope_variant;
+      setVariant(
+        fromEdit === "members" || fromEdit === "agents"
+          ? fromEdit
+          : editView
+            ? "all"
+            : (scope.actorKind ?? "all"),
+      );
+    } else if (scope.kind === "my") {
+      const fromEdit = editView?.scope_variant;
+      setVariant(
+        fromEdit && (MY_VARIANTS as readonly string[]).includes(fromEdit)
+          ? (fromEdit as ScopeVariantValue)
+          : scope.variant,
+      );
+    }
+  }, [open, liveStore, editView, seedFromDefinition, scope]);
 
   const { data: projects = [] } = useQuery({
     ...projectListOptions(wsId),
@@ -459,9 +496,19 @@ export function SaveViewDialog({
 
   const scopeHint =
     scope.kind === "workspace"
-      ? t(($) => $.save_view.hint_workspace)
+      ? variant === "members"
+        ? t(($) => $.save_view.hint_workspace_members)
+        : variant === "agents"
+          ? t(($) => $.save_view.hint_workspace_agents)
+          : t(($) => $.save_view.hint_workspace)
       : scope.kind === "my"
-        ? t(($) => $.save_view[MY_VARIANT_HINT_KEY[scope.variant]])
+        ? t(($) => $.save_view[
+            MY_VARIANT_HINT_KEY[
+              (MY_VARIANTS as readonly string[]).includes(variant)
+                ? (variant as (typeof MY_VARIANTS)[number])
+                : scope.variant
+            ]
+          ])
         : t(($) => $.save_view.hint_project, { title: projectTitle });
 
   const create = () => {
@@ -477,7 +524,14 @@ export function SaveViewDialog({
       visibility: scope.kind === "my" ? ("private" as const) : visibility,
       scope_type: scope.kind,
       scope_id: scope.kind === "project" ? scope.projectId : null,
-      scope_variant: scope.kind === "my" ? scope.variant : null,
+      scope_variant:
+        scope.kind === "my"
+          ? ((MY_VARIANTS as readonly string[]).includes(variant)
+              ? (variant as CreateIssueViewRequest["scope_variant"])
+              : scope.variant)
+          : scope.kind === "workspace" && (variant === "members" || variant === "agents")
+            ? variant
+            : null,
       definition_version: 1,
       query: {
         statusFilters: state.statusFilters,
@@ -515,6 +569,7 @@ export function SaveViewDialog({
           id: editView.id,
           name: payload.name,
           visibility: payload.visibility,
+          scope_variant: payload.scope_variant ?? null,
           query: payload.query,
           display: payload.display,
           expected_revision: editView.revision,
@@ -634,6 +689,42 @@ export function SaveViewDialog({
             <p className="pl-19 text-caption text-muted-foreground">
               {t(($) => $.save_view.my_private_note)}
             </p>
+          )}
+
+          {scope.kind !== "project" && (
+            <div className="flex items-center gap-3">
+              <Label className={ROW_LABEL}>
+                {t(($) => $.save_view.scope_label)}
+              </Label>
+              <Select
+                items={(scope.kind === "workspace"
+                  ? WORKSPACE_VARIANTS
+                  : MY_VARIANTS
+                ).map((v) => ({
+                  value: v as string,
+                  label: t(($) => $.save_view[VARIANT_LABEL_KEY[v]]),
+                }))}
+                value={variant}
+                onValueChange={(v) => {
+                  if (v) setVariant(v as ScopeVariantValue);
+                }}
+              >
+                <SelectTrigger size="sm" className="w-64" aria-label={t(($) => $.save_view.scope_label)}>
+                  <SelectValue>
+                    {t(($) => $.save_view[VARIANT_LABEL_KEY[variant]])}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start">
+                  <SelectGroup>
+                    {(scope.kind === "workspace" ? WORKSPACE_VARIANTS : MY_VARIANTS).map((v) => (
+                      <SelectItem key={v} value={v}>
+                        {t(($) => $.save_view[VARIANT_LABEL_KEY[v]])}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
           )}
 
           {draftStore && (

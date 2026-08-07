@@ -205,3 +205,63 @@ func createSecondWorkspaceMember(t *testing.T) string {
 	})
 	return userID
 }
+
+func TestWorkspaceIssueViewVariant(t *testing.T) {
+	enableIssueViews(t)
+
+	// Save from the Agents tab: variant persists.
+	view, code, body := createIssueViewForTest(t, map[string]any{
+		"name":          "Agent work",
+		"scope_type":    "workspace",
+		"scope_variant": "agents",
+		"query":         map[string]any{},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", code, body)
+	}
+	if view.ScopeVariant == nil || *view.ScopeVariant != "agents" {
+		t.Fatalf("workspace variant not persisted: %+v", view.ScopeVariant)
+	}
+
+	// "all" normalizes to NULL (no restriction).
+	view2, code, body := createIssueViewForTest(t, map[string]any{
+		"name":          "Everything",
+		"scope_type":    "workspace",
+		"scope_variant": "all",
+		"query":         map[string]any{},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", code, body)
+	}
+	if view2.ScopeVariant != nil {
+		t.Fatalf("'all' must normalize to NULL, got %v", *view2.ScopeVariant)
+	}
+
+	// My-only variants are rejected on workspace views.
+	_, code, _ = createIssueViewForTest(t, map[string]any{
+		"name":          "Bad variant",
+		"scope_type":    "workspace",
+		"scope_variant": "assigned",
+		"query":         map[string]any{},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for my-variant on workspace view, got %d", code)
+	}
+
+	// Switching the variant via PATCH works; the scope_type stays fixed.
+	w := httptest.NewRecorder()
+	req := newRequest("PATCH", "/api/issue-views/"+view.ID, map[string]any{
+		"scope_variant":     "members",
+		"expected_revision": 1,
+	})
+	req = withURLParam(req, "id", view.ID)
+	testHandler.UpdateIssueView(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("patch variant: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var updated IssueViewResponse
+	json.NewDecoder(w.Body).Decode(&updated)
+	if updated.ScopeVariant == nil || *updated.ScopeVariant != "members" {
+		t.Fatalf("variant switch lost: %+v", updated.ScopeVariant)
+	}
+}
