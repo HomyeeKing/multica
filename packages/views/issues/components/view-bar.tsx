@@ -247,9 +247,22 @@ export function ViewBar({
     [builtins, views, currentUserId, myRole],
   );
 
+  // Synchronous mirror of a just-dropped order. The preference mutation is
+  // optimistic but its onMutate is async — without this, the dropped tab
+  // renders back at its OLD slot for a frame before the cache lands, which
+  // reads as a bounce. Cleared as soon as the preference data catches up.
+  const [localOrder, setLocalOrder] = useState<string[] | null>(null);
+  useEffect(() => {
+    setLocalOrder(null);
+  }, [preference]);
+  const displayPrefs = useMemo(
+    () => (localOrder ? { ...prefs, order: localOrder } : prefs),
+    [prefs, localOrder],
+  );
+
   const { visible, hiddenSet, ordered } = useMemo(
-    () => applyViewBarPrefs(items, prefs, anchorId),
-    [items, prefs, anchorId],
+    () => applyViewBarPrefs(items, displayPrefs, anchorId),
+    [items, displayPrefs, anchorId],
   );
 
   const builtinByKey = useMemo(
@@ -294,16 +307,22 @@ export function ViewBar({
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
   );
+  // Apply a move NOW (mirror) and persist it — both drag surfaces route
+  // through here so the drop lands visually in the same frame.
+  const applyMove = (activeId: string, overId: string) => {
+    const ids = ordered.map((item) => item.barItemId);
+    const from = ids.indexOf(activeId);
+    const to = ids.indexOf(overId);
+    if (from < 0 || to < 0) return;
+    const next = arrayMove(ids, from, to);
+    if (viewsReady) setLocalOrder(next);
+    savePrefs({ hidden: [...hiddenSet], order: next });
+  };
+
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    // Reorder within the FULL ordered document so the bar, the "more"
-    // panel and the manage dialog edit one list.
-    const ids = ordered.map((item) => item.barItemId);
-    const from = ids.indexOf(String(active.id));
-    const to = ids.indexOf(String(over.id));
-    if (from < 0 || to < 0) return;
-    savePrefs({ hidden: [...hiddenSet], order: arrayMove(ids, from, to) });
+    applyMove(String(active.id), String(over.id));
   };
 
   const confirmDelete = async (view: IssueView) => {
@@ -490,13 +509,7 @@ export function ViewBar({
             fitCount={fitCount}
             activeViewId={activeView?.id ?? null}
             pinnedViewIds={pinnedViewIds}
-            onMoveItem={(activeId, overId) => {
-              const ids = ordered.map((item) => item.barItemId);
-              const from = ids.indexOf(activeId);
-              const to = ids.indexOf(overId);
-              if (from < 0 || to < 0) return;
-              savePrefs({ hidden: [...hiddenSet], order: arrayMove(ids, from, to) });
-            }}
+            onMoveItem={applyMove}
             onSelectItem={selectItem}
             onEditView={(view) => {
               setMoreOpen(false);
