@@ -70,7 +70,7 @@ import { useSingleRowFit } from "../../common/single-row-fit";
 import { ManageViewsDialog } from "./manage-views-dialog";
 import {
   DeleteViewConfirm,
-  OverflowListPanel,
+  ViewListPanel,
   type ViewBarItem,
 } from "./view-bar-popover";
 import { useT } from "../../i18n";
@@ -85,11 +85,10 @@ export interface ViewBarBuiltin {
 
 /** Width shared by every tab: fits short names, truncates long ones. */
 const TAB_MAX_W = "max-w-40";
-/** Reserved px beside the tabs: the [⧉] menu is always there; the "more"
- *  trigger appears only on overflow; the promoted active tab is widest. */
-const RESERVE_MENU = 36;
-const RESERVE_MORE = RESERVE_MENU + 32;
-const RESERVE_PROMOTED = RESERVE_MENU + 200;
+/** Reserved px beside the tabs: the [⧉] menu and the always-present list
+ *  trigger; the promoted active tab is the wide shape. */
+const RESERVE_BASE = 36 + 32;
+const RESERVE_PROMOTED = 36 + 200;
 
 /** One bar tab: sortable in place; suppresses the click that ends a drag. */
 function SortableBarTab({
@@ -263,30 +262,20 @@ export function ViewBar({
   // fall out ("more" trigger, then the promoted active tab), which shrinks
   // the fit further and keeps them out — the settle is monotonic.
   const activeBarId = activeView ? `view:${activeView.id}` : null;
-  const [reserveTier, setReserveTier] = useState<"menu" | "more" | "promoted">(
-    "menu",
-  );
-  const reserve =
-    reserveTier === "promoted"
-      ? RESERVE_PROMOTED
-      : reserveTier === "more"
-        ? RESERVE_MORE
-        : RESERVE_MENU;
+  const [promotedTier, setPromotedTier] = useState(false);
   const { containerRef, measureRef, fitCount } = useSingleRowFit({
     count: visible.length,
     gap: 4,
-    reserve,
+    reserve: promotedTier ? RESERVE_PROMOTED : RESERVE_BASE,
   });
   const fitting = visible.slice(0, fitCount);
   const overflowed = visible.slice(fitCount);
   const activeOverflowed =
     !!activeBarId && overflowed.some((item) => item.barItemId === activeBarId);
   useEffect(() => {
-    setReserveTier(
-      activeOverflowed ? "promoted" : overflowed.length > 0 ? "more" : "menu",
-    );
-  }, [activeOverflowed, overflowed.length]);
-  const promoted = reserveTier === "promoted" && activeOverflowed;
+    setPromotedTier(activeOverflowed);
+  }, [activeOverflowed]);
+  const promoted = promotedTier && activeOverflowed;
 
   const savePrefs = (next: { hidden: string[]; order: string[] }) => {
     // A drag can land before the views list has loaded; pruning against an
@@ -465,59 +454,66 @@ export function ViewBar({
         </SortableContext>
       </DndContext>
 
-      {/* "More": only exists while something is overflowed. The open view
-          never disappears into it — it becomes the trigger itself. */}
-      {overflowed.length > 0 && (
-        <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-          <PopoverTrigger
-            render={
-              promoted && activeView ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={cn(
-                    TAB_MAX_W,
-                    "shrink-0 gap-1 bg-accent text-accent-foreground hover:bg-accent/80",
-                  )}
-                >
-                  <span className="truncate">{activeView.name}</span>
-                  <ChevronDown className="size-3 shrink-0" />
-                </Button>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  aria-label={t(($) => $.view_bar.more_label)}
-                  className="shrink-0 px-1.5 text-muted-foreground"
-                >
-                  <MoreHorizontal className="size-3.5" />
-                </Button>
-              )
-            }
+      {/* The full list — always reachable. Reordering here decides what
+          fits on the bar; the open view becomes the trigger when it
+          overflows so it never disappears. */}
+      <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+        <PopoverTrigger
+          render={
+            promoted && activeView ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  TAB_MAX_W,
+                  "shrink-0 gap-1 bg-accent text-accent-foreground hover:bg-accent/80",
+                )}
+              >
+                <span className="truncate">{activeView.name}</span>
+                <ChevronDown className="size-3 shrink-0" />
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label={t(($) => $.view_bar.more_label)}
+                className="shrink-0 px-1.5 text-muted-foreground"
+              >
+                <MoreHorizontal className="size-3.5" />
+              </Button>
+            )
+          }
+        />
+        <PopoverContent align="end" className="w-64 p-0">
+          <ViewListPanel
+            items={visible}
+            fitCount={fitCount}
+            activeViewId={activeView?.id ?? null}
+            pinnedViewIds={pinnedViewIds}
+            onMoveItem={(activeId, overId) => {
+              const ids = ordered.map((item) => item.barItemId);
+              const from = ids.indexOf(activeId);
+              const to = ids.indexOf(overId);
+              if (from < 0 || to < 0) return;
+              savePrefs({ hidden: [...hiddenSet], order: arrayMove(ids, from, to) });
+            }}
+            onSelectItem={selectItem}
+            onEditView={(view) => {
+              setMoreOpen(false);
+              onEditView(view);
+            }}
+            onDeleteView={(view) => {
+              setMoreOpen(false);
+              setDeleting(view);
+            }}
+            onTogglePin={togglePin}
+            onHideItem={(barItemId) => {
+              setMoreOpen(false);
+              toggleHidden(barItemId, true);
+            }}
           />
-          <PopoverContent align="end" className="w-64 p-0">
-            <OverflowListPanel
-              items={overflowed}
-              activeViewId={activeView?.id ?? null}
-              pinnedViewIds={pinnedViewIds}
-              onSelectItem={selectItem}
-              onEditView={(view) => {
-                setMoreOpen(false);
-                onEditView(view);
-              }}
-              onDeleteView={(view) => {
-                setMoreOpen(false);
-                setDeleting(view);
-              }}
-              onTogglePin={togglePin}
-              onToggleHidden={(barItemId) => {
-                setMoreOpen(false);
-                toggleHidden(barItemId, true);
-              }}
-            />
-          </PopoverContent>
-        </Popover>
-      )}
+        </PopoverContent>
+      </Popover>
 
       <DropdownMenu>
         <Tooltip>

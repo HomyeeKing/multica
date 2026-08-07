@@ -1,7 +1,23 @@
 "use client";
 
 import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import {
   EyeOff,
+  GripVertical,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -40,9 +56,17 @@ export interface ViewBarItem {
   canManage?: boolean;
 }
 
+/** The vertical-locked row drag has no DragOverlay under the pointer, so
+ *  the grabbing cursor is promoted to the document for the drag's duration
+ *  (see the `data-dnd-dragging` contract in ui/styles/base.css). */
+function setDndCursor(on: boolean) {
+  if (on) document.documentElement.dataset.dndDragging = "true";
+  else delete document.documentElement.dataset.dndDragging;
+}
+
 /**
  * The one delete-view confirmation, shared by the manage dialog, the bar's
- * context menu, and the overflow rows so every entrance carries identical
+ * context menu, and the list-panel rows so every entrance carries identical
  * copy and the same "deletes the view only, never issues" contract.
  */
 export function DeleteViewConfirm({
@@ -85,116 +109,198 @@ export function DeleteViewConfirm({
   );
 }
 
+function SortablePanelRow({
+  item,
+  active,
+  pinned,
+  onSelect,
+  onEdit,
+  onDelete,
+  onTogglePin,
+  onHide,
+}: {
+  item: ViewBarItem;
+  active: boolean;
+  pinned: boolean;
+  onSelect: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
+  onTogglePin?: () => void;
+  onHide?: () => void;
+}) {
+  const { t } = useT("issues");
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: item.barItemId });
+  const isView = item.kind === "view";
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={cn(
+        "group/view-row flex items-center gap-1.5 rounded-md px-1.5 py-1",
+        isDragging ? "z-10 bg-accent opacity-80" : "hover:bg-muted/60",
+      )}
+    >
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        aria-label={t(($) => $.view_bar.drag_handle)}
+        className={cn(
+          "cursor-grab active:cursor-grabbing text-faint-foreground hover:text-muted-foreground",
+          isDragging && "cursor-grabbing",
+        )}
+      >
+        <GripVertical className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-1.5 text-left text-body",
+          active && "font-medium",
+        )}
+      >
+        <span className="truncate">{item.label}</span>
+        {item.kind === "builtin" && (
+          <span className="shrink-0 text-caption text-muted-foreground">
+            {t(($) => $.view_bar.builtin_tag)}
+          </span>
+        )}
+      </button>
+      {isView && item.view && (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t(($) => $.view_bar.row_menu)}
+                className="text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover/view-row:opacity-100"
+              >
+                <MoreHorizontal className="size-3.5" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="w-44">
+            {/* Same permission presentation as the tab context menu:
+                edit greys out, delete hides. */}
+            <DropdownMenuItem disabled={!item.canManage} onClick={onEdit}>
+              <Pencil className="size-3.5" />
+              {t(($) => $.view_bar.context_edit)}
+            </DropdownMenuItem>
+            {item.canManage && (
+              <DropdownMenuItem variant="destructive" onClick={onDelete}>
+                <Trash2 className="size-3.5" />
+                {t(($) => $.view_bar.delete)}
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={onTogglePin}>
+              {pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+              {pinned
+                ? t(($) => $.view_bar.context_unpin)
+                : t(($) => $.view_bar.context_pin)}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onHide}>
+              <EyeOff className="size-3.5" />
+              {t(($) => $.view_bar.row_hide)}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
+  );
+}
+
 /**
- * The "more" panel: just the tabs that didn't fit on the single-row bar,
- * in bar order. Rows select on click; saved-view rows carry the same
- * actions as a bar tab's context menu (they have no rendered tab to
- * right-click). Ordering/visibility management stays in the manage
- * dialog — this panel is reach, not administration.
+ * The pulled-down list: EVERY tab on the bar, in bar order, drag to
+ * reorder — the same preference document the bar's inline drag writes.
+ * Because the bar shows the longest fitting prefix, reordering here IS
+ * the control over what stays visible: drag something up to put it on
+ * the bar, down to tuck it away. A separator marks the current fold.
  */
-export function OverflowListPanel({
+export function ViewListPanel({
   items,
+  fitCount,
   activeViewId,
   pinnedViewIds,
+  onMoveItem,
   onSelectItem,
   onEditView,
   onDeleteView,
   onTogglePin,
-  onToggleHidden,
+  onHideItem,
 }: {
+  /** All bar candidates in order (hidden ones excluded, as on the bar). */
   items: ViewBarItem[];
+  /** How many currently fit on the bar — the fold line. */
+  fitCount: number;
   activeViewId: string | null;
   pinnedViewIds: ReadonlySet<string>;
+  /** Reorder request: move the item with `activeId` next to `overId`. */
+  onMoveItem: (activeId: string, overId: string) => void;
   onSelectItem: (item: ViewBarItem) => void;
   onEditView: (view: IssueView) => void;
   onDeleteView: (view: IssueView) => void;
   onTogglePin: (view: IssueView, pinned: boolean) => void;
-  onToggleHidden: (barItemId: string) => void;
+  onHideItem: (barItemId: string) => void;
 }) {
-  const { t } = useT("issues");
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    setDndCursor(false);
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    onMoveItem(String(active.id), String(over.id));
+  };
+
   return (
     <div className="max-h-96 overflow-y-auto p-1">
-      {items.map((item) => {
-        const isView = item.kind === "view";
-        const active =
-          isView && item.view ? item.view.id === activeViewId : false;
-        const pinned = !!item.view && pinnedViewIds.has(item.view.id);
-        return (
-          <div
-            key={item.barItemId}
-            className="group/view-row flex items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-muted/60"
-          >
-            <button
-              type="button"
-              onClick={() => onSelectItem(item)}
-              className={cn(
-                "flex min-w-0 flex-1 items-center gap-1.5 text-left text-body",
-                active ? "font-medium" : "text-foreground",
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        modifiers={[restrictToVerticalAxis]}
+        autoScroll={{ threshold: { x: 0, y: 0.15 } }}
+        onDragStart={() => setDndCursor(true)}
+        onDragCancel={() => setDndCursor(false)}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext
+          items={items.map((item) => item.barItemId)}
+          strategy={verticalListSortingStrategy}
+        >
+          {items.map((item, index) => (
+            <div key={item.barItemId}>
+              {/* The fold: everything above is on the bar right now. */}
+              {index === fitCount && index > 0 && (
+                <div className="mx-1.5 my-1 border-t border-border" />
               )}
-            >
-              <span className="truncate">{item.label}</span>
-              {item.kind === "builtin" && (
-                <span className="shrink-0 text-caption text-muted-foreground">
-                  {t(($) => $.view_bar.builtin_tag)}
-                </span>
-              )}
-            </button>
-            {isView && item.view && (
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={t(($) => $.view_bar.row_menu)}
-                      className="text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover/view-row:opacity-100"
-                    >
-                      <MoreHorizontal className="size-3.5" />
-                    </Button>
-                  }
-                />
-                <DropdownMenuContent align="end" className="w-44">
-                  {/* Same permission presentation as the tab context menu:
-                      edit greys out, delete hides. */}
-                  <DropdownMenuItem
-                    disabled={!item.canManage}
-                    onClick={() => onEditView(item.view!)}
-                  >
-                    <Pencil className="size-3.5" />
-                    {t(($) => $.view_bar.context_edit)}
-                  </DropdownMenuItem>
-                  {item.canManage && (
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onClick={() => onDeleteView(item.view!)}
-                    >
-                      <Trash2 className="size-3.5" />
-                      {t(($) => $.view_bar.delete)}
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem
-                    onClick={() => onTogglePin(item.view!, pinned)}
-                  >
-                    {pinned ? (
-                      <PinOff className="size-3.5" />
-                    ) : (
-                      <Pin className="size-3.5" />
-                    )}
-                    {pinned
-                      ? t(($) => $.view_bar.context_unpin)
-                      : t(($) => $.view_bar.context_pin)}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => onToggleHidden(item.barItemId)}>
-                    <EyeOff className="size-3.5" />
-                    {t(($) => $.view_bar.row_hide)}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </div>
-        );
-      })}
+              <SortablePanelRow
+                item={item}
+                active={
+                  item.kind === "view" && item.view
+                    ? item.view.id === activeViewId
+                    : false
+                }
+                pinned={!!item.view && pinnedViewIds.has(item.view.id)}
+                onSelect={() => onSelectItem(item)}
+                onEdit={item.view ? () => onEditView(item.view!) : undefined}
+                onDelete={item.view ? () => onDeleteView(item.view!) : undefined}
+                onTogglePin={
+                  item.view
+                    ? () => onTogglePin(item.view!, pinnedViewIds.has(item.view!.id))
+                    : undefined
+                }
+                onHide={() => onHideItem(item.barItemId)}
+              />
+            </div>
+          ))}
+        </SortableContext>
+      </DndContext>
     </div>
   );
 }
