@@ -1610,15 +1610,21 @@ func TestMultiThreadReplyInstructionsFanOut(t *testing.T) {
 	// retired in favour of the `## Comment Formatting` pointer above — it
 	// triple-wrote the mechanism already carried by the brief and the
 	// single-thread cookbook (~1KB per multi-thread turn). These strings are
-	// the retired machinery; none may reappear in the fan-out block:
+	// the retired machinery; none may reappear in the fan-out block. The
+	// `--content-file` / inline `--content` anchors and the semantic
+	// `\n`-escape anchor (replacing the phrasing-fragile "Do NOT write
+	// literal") were added on Elon's #6517 review: without them, prose-only
+	// restatements of the flag mechanics could regrow under green tests.
 	for _, banned := range []string{
 		"For EACH thread above",                // old cookbook opener
 		"UTF-8 file with your file-write tool", // restated mechanism
 		"multica issue comment add",            // embedded example commands
+		"--content-file",                       // restated posting flag (#6517 review)
+		"inline `--content`",                   // restated inline ban (#6517 review)
 		"--content-stdin",                      // restated HEREDOC ban
 		"rm ./reply-",                          // unix cleanup example
 		"Remove-Item",                          // windows cleanup example
-		"Do NOT write literal",                 // restated \n-escape rule
+		"`\\n` escape",                         // restated \n-escape rule, any phrasing
 	} {
 		if strings.Contains(out, banned) {
 			t.Errorf("fan-out block re-grew retired cookbook text %q (mechanism lives in ## Comment Formatting — MUL-5825), got:\n%s", banned, out)
