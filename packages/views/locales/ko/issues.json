@@ -692,11 +692,7 @@
   "view_bar": {
     "menu_label": "뷰",
     "menu_new": "새 뷰",
-    "menu_manage": "뷰 관리",
-    "manage_title": "뷰 관리",
-    "manage_hint": "순서와 표시 설정은 본인에게만 적용됩니다",
     "builtin_tag": "기본 제공",
-    "visible_toggle": "뷰 바에 표시",
     "drag_handle": "드래그로 순서 변경",
     "delete": "삭제",
     "delete_title": "뷰를 삭제할까요?",
@@ -704,6 +700,9 @@
     "toast_deleted": "뷰가 삭제되었습니다",
     "context_edit": "뷰 편집",
     "context_pin": "사이드바에 고정",
-    "context_unpin": "사이드바 고정 해제"
+    "context_unpin": "사이드바 고정 해제",
+    "row_menu": "추가 작업",
+    "row_hide": "바에서 숨기기",
+    "row_show": "바에 표시"
   }
 }

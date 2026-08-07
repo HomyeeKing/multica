@@ -692,11 +692,7 @@
   "view_bar": {
     "menu_label": "ビュー",
     "menu_new": "新規ビュー",
-    "menu_manage": "ビューを管理",
-    "manage_title": "ビューを管理",
-    "manage_hint": "並び順と表示設定は自分にのみ適用されます",
     "builtin_tag": "組み込み",
-    "visible_toggle": "ビューバーに表示",
     "drag_handle": "ドラッグで並べ替え",
     "delete": "削除",
     "delete_title": "ビューを削除しますか？",
@@ -704,6 +700,9 @@
     "toast_deleted": "ビューを削除しました",
     "context_edit": "ビューを編集",
     "context_pin": "サイドバーに固定",
-    "context_unpin": "サイドバーから固定解除"
+    "context_unpin": "サイドバーから固定解除",
+    "row_menu": "その他の操作",
+    "row_hide": "バーから隠す",
+    "row_show": "バーに表示"
   }
 }

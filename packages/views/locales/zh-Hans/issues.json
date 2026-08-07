@@ -692,11 +692,7 @@
   "view_bar": {
     "menu_label": "视图",
     "menu_new": "新增视图",
-    "menu_manage": "管理视图",
-    "manage_title": "管理视图",
-    "manage_hint": "排序与显隐只影响你自己",
     "builtin_tag": "内置",
-    "visible_toggle": "在视图栏显示",
     "drag_handle": "拖拽排序",
     "delete": "删除",
     "delete_title": "删除视图？",
@@ -704,6 +700,9 @@
     "toast_deleted": "视图已删除",
     "context_edit": "编辑视图",
     "context_pin": "固定到侧栏",
-    "context_unpin": "从侧栏取消固定"
+    "context_unpin": "从侧栏取消固定",
+    "row_menu": "更多操作",
+    "row_hide": "在栏中隐藏",
+    "row_show": "在栏中显示"
   }
 }

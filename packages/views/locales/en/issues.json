@@ -717,11 +717,7 @@
   "view_bar": {
     "menu_label": "Views",
     "menu_new": "New view",
-    "menu_manage": "Manage views",
-    "manage_title": "Manage views",
-    "manage_hint": "Order and visibility only affect you",
     "builtin_tag": "Built-in",
-    "visible_toggle": "Show in view bar",
     "drag_handle": "Drag to reorder",
     "delete": "Delete",
     "delete_title": "Delete view?",
@@ -729,6 +725,9 @@
     "toast_deleted": "View deleted",
     "context_edit": "Edit view",
     "context_pin": "Pin to sidebar",
-    "context_unpin": "Unpin from sidebar"
+    "context_unpin": "Unpin from sidebar",
+    "row_menu": "More actions",
+    "row_hide": "Hide from bar",
+    "row_show": "Show on bar"
   }
 }
