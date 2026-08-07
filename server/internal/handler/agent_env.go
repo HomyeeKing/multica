@@ -419,6 +419,15 @@ func (h *Handler) MergeAgentsEnv(w http.ResponseWriter, r *http.Request) {
 	for _, a := range agents {
 		byID[uuidToString(a.ID)] = a
 	}
+	// Same non-disclosure rule the migration endpoint applies: an agent this
+	// caller cannot SEE is reported exactly like an id that never existed, so
+	// a bulk request cannot confirm a hidden agent's existence or leak its
+	// name through a `forbidden` skip (MUL-5758 security review).
+	visible, ok := h.visibleAgentIDSet(r.Context(), agents, actorType, member)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "failed to resolve agent visibility")
+		return
+	}
 
 	out := mergeAgentsEnvResponse{
 		Results: []mergeAgentsEnvResult{},
@@ -428,10 +437,13 @@ func (h *Handler) MergeAgentsEnv(w http.ResponseWriter, r *http.Request) {
 	for _, id := range agentIDs {
 		key := uuidToString(id)
 		agent, found := byID[key]
+		if _, seen := visible[key]; found && !seen {
+			found = false
+		}
 		if !found {
-			// Same non-disclosure stance as the migration endpoint: an
-			// agent in another workspace is reported exactly like an id
-			// that never existed.
+			// An agent in another workspace, an agent hidden from this
+			// caller, and an id that never existed are all reported
+			// identically.
 			out.Skipped = append(out.Skipped, skippedAgentResult{AgentID: key, Reason: migrateSkipNotFound})
 			continue
 		}

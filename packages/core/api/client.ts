@@ -1606,9 +1606,11 @@ export class ApiClient {
   // projection can produce it (presence folds 'dispatched' into "queued" and
   // omits 'deferred' entirely).
   //
-  // Throws on the 409 `runtime_migration_plan_changed` like any other non-2xx,
-  // carrying the server's fresh `active_agents` in the error body — the caller
-  // re-renders the dialog and makes the user confirm the live set.
+  // Throws on the 409 `runtime_migration_plan_changed` like any other non-2xx.
+  // The error body carries `active_agents` as an identity-only planning list
+  // ({agent_id, name}) restricted to agents the caller may see — never the
+  // agent resource, which would ship mcp_config and instructions through a
+  // path with no redaction. The caller re-renders and reconfirms.
   async migrateAgentsToRuntime(
     runtimeId: string,
     body: MigrateAgentsToRuntimeRequest,

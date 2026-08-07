@@ -78,8 +78,13 @@ var runtimeMigrateAgentsCmd = &cobra.Command{
 		"Queued and deferred tasks move with the agents; tasks a runtime is already running stay " +
 		"where they are until they finish. Model, thinking level and service tier are runtime-native " +
 		"and get cleared so the new runtime resolves its own defaults.\n\n" +
-		"Agents you may not manage, and agents already on the target, are reported as skipped rather " +
-		"than failing the request. Use --dry-run to see the exact effect first.",
+		"An agent already on the target runtime is NOT skipped: this command writes the state you " +
+		"asked for, so such an agent stays put and has its model settings cleared like every other " +
+		"agent in the request. Pass only the agents you intend to rebind. To set a model instead of " +
+		"clearing it, follow up with 'multica agent update <agent-id> --model <id>' — this command " +
+		"has no --model flag yet.\n\n" +
+		"Agents you may not manage are reported as skipped rather than failing the request. " +
+		"Use --dry-run to see the exact effect first.",
 	Args: exactArgs(1),
 	RunE: runRuntimeMigrateAgents,
 }

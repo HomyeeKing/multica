@@ -83,8 +83,22 @@ type migratedAgentResult struct {
 
 type skippedAgentResult struct {
 	AgentID string `json:"agent_id"`
-	Name    string `json:"name,omitempty"`
-	Reason  string `json:"reason"`
+	// Present only for agents the caller can already see in the agent list.
+	// An agent they cannot see is reported as not_found with no name, so a
+	// bulk request can never confirm the existence of a hidden agent.
+	Name   string `json:"name,omitempty"`
+	Reason string `json:"reason"`
+}
+
+// migrationPlanAgent is the identity-only shape echoed by the stale-plan 409.
+//
+// Deliberately NOT AgentResponse: the caller needs just enough to re-render a
+// confirmation, and this path has none of ListAgents' secret redaction, so
+// shipping the full resource here would expose mcp_config, instructions and
+// the Composio allowlist of every agent on a shared runtime.
+type migrationPlanAgent struct {
+	AgentID string `json:"agent_id"`
+	Name    string `json:"name"`
 }
 
 // migrateAgentsToRuntimeResponse is identical for dry runs and real runs so the
@@ -151,6 +165,9 @@ func (h *Handler) MigrateAgentsToRuntime(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	// Resolved once and reused: the visibility gate below and the post-commit
+	// broadcast must agree on who is acting.
+	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
 	// Same gate UpdateAgent applies to a single runtime change: a private
 	// runtime only accepts agents from its owner or a workspace admin.
 	if !canUseRuntimeForAgent(member, target) {
@@ -197,7 +214,7 @@ func (h *Handler) MigrateAgentsToRuntime(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.DryRun {
-		h.previewAgentMigration(w, r, target, member, agentIDs, clearModelSettings)
+		h.previewAgentMigration(w, r, target, member, actorType, agentIDs, clearModelSettings)
 		return
 	}
 
@@ -254,15 +271,44 @@ func (h *Handler) MigrateAgentsToRuntime(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusInternalServerError, "failed to enumerate the source runtime's agents")
 			return
 		}
-		if !activeAgentSetMatches(current, uuidSetOf(agentIDs)) {
-			resp := make([]AgentResponse, len(current))
-			for i, a := range current {
-				resp[i] = h.agentToResponse(a)
+		// Compare against — and echo — only what this caller may SEE. Two
+		// reasons, both found in the MUL-5758 security review:
+		//
+		//   1. The raw set leaks. It is built from the runtime, not from the
+		//      caller's visibility, so echoing it hands a plain member every
+		//      private agent on a shared runtime.
+		//   2. The raw set also breaks the feature for that member: the page
+		//      rendered the filtered list, so a hidden agent on the source
+		//      runtime would make every confirmation 409 forever.
+		visible, ok := h.visibleAgentIDSet(r.Context(), current, actorType, member)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "failed to resolve agent visibility")
+			return
+		}
+		visibleAgents := make([]db.Agent, 0, len(current))
+		for _, a := range current {
+			if _, seen := visible[uuidToString(a.ID)]; seen {
+				visibleAgents = append(visibleAgents, a)
+			}
+		}
+		if !activeAgentSetMatches(visibleAgents, uuidSetOf(agentIDs)) {
+			// A planning snapshot, never the agent resource: the caller needs
+			// identity to re-render a confirmation, and nothing else. Echoing
+			// AgentResponse here would ship mcp_config (third-party tokens),
+			// instructions and the Composio allowlist through a path that has
+			// none of ListAgents' redaction — the MUL-2600 lateral-movement
+			// vector, reopened on a new endpoint.
+			plan := make([]migrationPlanAgent, len(visibleAgents))
+			for i, a := range visibleAgents {
+				plan[i] = migrationPlanAgent{
+					AgentID: uuidToString(a.ID),
+					Name:    a.Name,
+				}
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"error":         "the agent set on this runtime changed; please review and confirm again.",
 				"code":          "runtime_migration_plan_changed",
-				"active_agents": resp,
+				"active_agents": plan,
 			})
 			return
 		}
@@ -277,7 +323,12 @@ func (h *Handler) MigrateAgentsToRuntime(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	plan := planAgentMigration(agents, agentIDs, member, clearModelSettings)
+	visibleTargets, ok := h.visibleAgentIDSet(r.Context(), agents, actorType, member)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "failed to resolve agent visibility")
+		return
+	}
+	plan := planAgentMigration(agents, agentIDs, member, visibleTargets, clearModelSettings)
 	out := migrateAgentsToRuntimeResponse{
 		TargetRuntimeID: uuidToString(target.ID),
 		Migrated:        plan.migrated,
@@ -343,7 +394,6 @@ func (h *Handler) MigrateAgentsToRuntime(w http.ResponseWriter, r *http.Request)
 	// subscribers each agent changed, then wake the runtime that just
 	// inherited claimable work.
 	userID := uuidToString(member.UserID)
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
 	for _, a := range migrated {
 		resp := h.agentToResponse(a)
 		h.publish(protocol.EventAgentStatus, workspaceID, actorType, actorID, map[string]any{
@@ -381,6 +431,7 @@ func (h *Handler) previewAgentMigration(
 	r *http.Request,
 	target db.AgentRuntime,
 	member db.Member,
+	actorType string,
 	agentIDs []pgtype.UUID,
 	clearModelSettings bool,
 ) {
@@ -393,7 +444,12 @@ func (h *Handler) previewAgentMigration(
 		return
 	}
 
-	plan := planAgentMigration(agents, agentIDs, member, clearModelSettings)
+	visible, ok := h.visibleAgentIDSet(r.Context(), agents, actorType, member)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "failed to resolve agent visibility")
+		return
+	}
+	plan := planAgentMigration(agents, agentIDs, member, visible, clearModelSettings)
 	out := migrateAgentsToRuntimeResponse{
 		TargetRuntimeID: uuidToString(target.ID),
 		DryRun:          true,
@@ -439,6 +495,7 @@ func planAgentMigration(
 	agents []db.Agent,
 	requested []pgtype.UUID,
 	member db.Member,
+	visible map[string]struct{},
 	clearModelSettings bool,
 ) agentMigrationPlan {
 	byID := make(map[string]db.Agent, len(agents))
@@ -453,6 +510,13 @@ func planAgentMigration(
 	for _, id := range requested {
 		key := uuidToString(id)
 		agent, found := byID[key]
+		// An agent the caller cannot SEE is reported exactly like an id that
+		// never existed — same non-disclosure rule the cross-workspace case
+		// already follows. Skipping it as `forbidden` (with a name) would
+		// confirm the existence of an agent hidden from this caller's list.
+		if _, seen := visible[key]; found && !seen {
+			found = false
+		}
 		if !found {
 			plan.skipped = append(plan.skipped, skippedAgentResult{AgentID: key, Reason: migrateSkipNotFound})
 			continue

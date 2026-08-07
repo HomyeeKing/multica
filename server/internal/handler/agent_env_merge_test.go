@@ -424,3 +424,43 @@ func TestMergeEnvKeys(t *testing.T) {
 		t.Error("mergeEnvKeys must not mutate the caller's existing map")
 	}
 }
+
+// TestMergeAgentsEnv_HiddenAgentIsNotFound pins the same non-disclosure rule
+// the migration endpoint follows (MUL-5758 security review): an agent inside
+// the workspace but invisible to this caller is reported exactly like an id
+// that never existed. Reporting it as `forbidden` with its name would let a
+// plain member enumerate private agents through a bulk write.
+func TestMergeAgentsEnv_HiddenAgentIsNotFound(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	callerID := createPermissionTestMember(t, "env-hidden-caller@multica.test")
+	otherID := createPermissionTestMember(t, "env-hidden-other@multica.test")
+	hidden := createHiddenAgentOnRuntime(t, "env-hidden-agent", handlerTestRuntimeID(t), otherID)
+
+	w := mergeEnvRequest(t, callerID, map[string]any{
+		"agent_ids": []string{hidden},
+		"set":       map[string]string{"INJECTED": "value"},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	resp := decodeMergeEnvResponse(t, w)
+
+	if len(resp.Results) != 0 {
+		t.Fatalf("a hidden agent must not be written, got %+v", resp.Results)
+	}
+	if len(resp.Skipped) != 1 {
+		t.Fatalf("expected 1 skip, got %+v", resp.Skipped)
+	}
+	if resp.Skipped[0].Reason != migrateSkipNotFound {
+		t.Errorf("reason = %q, want %q", resp.Skipped[0].Reason, migrateSkipNotFound)
+	}
+	if resp.Skipped[0].Name != "" {
+		t.Errorf("a hidden agent's name must not be disclosed, got %q", resp.Skipped[0].Name)
+	}
+	if strings.Contains(w.Body.String(), "env-hidden-agent") {
+		t.Errorf("response must not name a hidden agent; body: %s", w.Body.String())
+	}
+}

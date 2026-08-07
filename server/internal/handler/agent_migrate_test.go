@@ -665,3 +665,155 @@ func TestParseBulkAgentIDs(t *testing.T) {
 		t.Fatalf("expected de-duplication preserving order, got %v", got)
 	}
 }
+
+// createHiddenAgentOnRuntime seeds a private agent owned by someone other than
+// the caller — invisible in that caller's agent list — bound to `runtimeID`
+// and carrying an mcp_config secret.
+func createHiddenAgentOnRuntime(t *testing.T, name, runtimeID, ownerID string) string {
+	t.Helper()
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, permission_mode, max_concurrent_tasks,
+			owner_id, instructions, custom_env, custom_args, mcp_config
+		)
+		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 'private', 1, $4,
+			'secret instructions', '{}'::jsonb, '[]'::jsonb, $5)
+		RETURNING id
+	`, testWorkspaceID, name, runtimeID, ownerID,
+		[]byte(`{"servers":{"vault":{"token":"super-secret-token"}}}`)).Scan(&agentID); err != nil {
+		t.Fatalf("create hidden agent %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+	})
+	return agentID
+}
+
+// TestMigrateAgentsToRuntime_StalePlanDoesNotLeakHiddenAgents is the
+// regression for the MUL-5758 security review.
+//
+// The stale-plan 409 used to echo `agentToResponse` for every active agent on
+// the source runtime, bypassing both of ListAgents' guards: the per-member
+// visibility filter and the mcp_config redaction. Any member who could use a
+// public target runtime could therefore submit a deliberately mismatched
+// agent_ids, trigger the conflict, and read other members' private agents
+// including their MCP credentials.
+//
+// Two properties are pinned here: the echoed payload never names an agent the
+// caller cannot see, and it never carries agent secrets in any form.
+func TestMigrateAgentsToRuntime_StalePlanDoesNotLeakHiddenAgents(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	source := createMigrationTestRuntime(t, "leak-source", "public", testUserID)
+	target := createMigrationTestRuntime(t, "leak-target", "public", testUserID)
+	callerID := createPermissionTestMember(t, "migrate-leak-caller@multica.test")
+	otherID := createPermissionTestMember(t, "migrate-leak-other@multica.test")
+
+	// The caller's own agent, plus a private agent belonging to someone else —
+	// both on the shared source runtime.
+	mine := createHandlerTestAgent(t, "leak-visible-agent", nil)
+	if _, err := testPool.Exec(ctx,
+		`UPDATE agent SET owner_id = $1, runtime_id = $2 WHERE id = $3`,
+		callerID, source, mine); err != nil {
+		t.Fatalf("bind caller agent: %v", err)
+	}
+	hidden := createHiddenAgentOnRuntime(t, "leak-hidden-agent", source, otherID)
+
+	// Force the conflict first, while the source runtime still holds both
+	// agents, and inspect exactly what the 409 discloses.
+	stranger := createHandlerTestAgent(t, "leak-stranger-agent", nil)
+	if _, err := testPool.Exec(ctx,
+		`UPDATE agent SET owner_id = $1 WHERE id = $2`, callerID, stranger); err != nil {
+		t.Fatalf("assign stranger owner: %v", err)
+	}
+	w := migrateRequest(t, callerID, target, map[string]any{
+		"agent_ids":                  []string{stranger},
+		"expected_source_runtime_id": source,
+	})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	if strings.Contains(body, hidden) || strings.Contains(body, "leak-hidden-agent") {
+		t.Errorf("409 must not disclose an agent the caller cannot see; body: %s", body)
+	}
+	for _, secret := range []string{"super-secret-token", "mcp_config", "instructions", "custom_env"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("409 must not carry %q; body: %s", secret, body)
+		}
+	}
+
+	var payload struct {
+		Code         string `json:"code"`
+		ActiveAgents []struct {
+			AgentID string `json:"agent_id"`
+			Name    string `json:"name"`
+		} `json:"active_agents"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode 409: %v", err)
+	}
+	if payload.Code != "runtime_migration_plan_changed" {
+		t.Errorf("code = %q", payload.Code)
+	}
+	if len(payload.ActiveAgents) != 1 || payload.ActiveAgents[0].AgentID != mine {
+		t.Fatalf("409 must list only the caller-visible agent, got %+v", payload.ActiveAgents)
+	}
+
+	// And the flip side of the same filter: confirming exactly the visible set
+	// must succeed. Comparing against the raw runtime set instead would leave
+	// this member unable to ever migrate off a runtime that also hosts an
+	// agent hidden from them.
+	w = migrateRequest(t, callerID, target, map[string]any{
+		"agent_ids":                  []string{mine},
+		"expected_source_runtime_id": source,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("visible-set confirmation must succeed, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := agentRuntimeIDOf(t, hidden); got != source {
+		t.Errorf("hidden agent must stay on the source runtime, got %s", got)
+	}
+}
+
+// TestMigrateAgentsToRuntime_HiddenAgentIsNotFound pins the non-disclosure
+// rule for the bulk skip list: an agent inside the workspace but invisible to
+// this caller is reported exactly like an id that never existed — no name, no
+// `forbidden` reason that would confirm it exists.
+func TestMigrateAgentsToRuntime_HiddenAgentIsNotFound(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	source := createMigrationTestRuntime(t, "hidden-skip-source", "public", testUserID)
+	target := createMigrationTestRuntime(t, "hidden-skip-target", "public", testUserID)
+	callerID := createPermissionTestMember(t, "migrate-hidden-caller@multica.test")
+	otherID := createPermissionTestMember(t, "migrate-hidden-other@multica.test")
+	hidden := createHiddenAgentOnRuntime(t, "hidden-skip-agent", source, otherID)
+
+	w := migrateRequest(t, callerID, target, map[string]any{"agent_ids": []string{hidden}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	resp := decodeMigrateResponse(t, w)
+
+	if len(resp.Skipped) != 1 {
+		t.Fatalf("expected 1 skip, got %+v", resp.Skipped)
+	}
+	if resp.Skipped[0].Reason != migrateSkipNotFound {
+		t.Errorf("reason = %q, want %q", resp.Skipped[0].Reason, migrateSkipNotFound)
+	}
+	if resp.Skipped[0].Name != "" {
+		t.Errorf("a hidden agent's name must not be disclosed, got %q", resp.Skipped[0].Name)
+	}
+	if got := agentRuntimeIDOf(t, hidden); got != source {
+		t.Errorf("hidden agent must not be written, runtime = %s", got)
+	}
+}
