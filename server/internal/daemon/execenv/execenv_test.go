@@ -4995,28 +4995,48 @@ func TestInjectRuntimeConfigMentionLoopHardening(t *testing.T) {
 		}
 	})
 
-	t.Run("workflow-carries-silence-as-exit-and-no-signoff-mention", func(t *testing.T) {
+	t.Run("workflow-reply-is-unconditional-and-no-signoff-mention", func(t *testing.T) {
 		t.Parallel()
 		s := readClaudeMD(t, commentTriggerCtx)
-		// The anti-loop signal must reach the brief; lock in the key phrases so
-		// it can't decay back into pure prose again. The reply-warranted rules
-		// live in the Reply mode block, while the no-sign-off-mention rule is
-		// mention policy and lives in `## Mentions` (MUL-5442) — these
-		// assertions are file-wide on purpose, so the signal is pinned without
-		// pinning which section carries it.
+		// MUL-5442 owner decision (2026-08-06): the generic no-reply rule is
+		// retired. It never carried the loop prevention — agent comments
+		// trigger nothing without an explicit @mention (the sole implicit
+		// wake is the squad-leader path), so the mention discipline pinned in
+		// the Mentions subtest above is the real defense. Ordinary agents are
+		// back on the unconditional one-comment-per-run contract; recorded
+		// silence via `no_action` remains squad-leader-only. Retired pins,
+		// replaced by the negative guards below so the apparatus cannot creep
+		// back: "Decide whether a reply is warranted", "produced actual
+		// work", "pure acknowledgment / thanks / sign-off", "do NOT reply",
+		// "Silence is a valid and preferred way".
 		for _, want := range []string{
-			"Decide whether a reply is warranted",
-			// Both outcomes pinned individually (MUL-5442 stage-1 review):
-			// the work-produced arm and the silent-exit arm must each
-			// survive compression, not just the bullet's heading.
-			"produced actual work",
-			"pure acknowledgment / thanks / sign-off",
-			"do NOT reply",
-			"Silence is a valid and preferred way",
+			"Posting your reply as a comment is mandatory",
+			"Do any requested work first",
 			"Never @mention the agent you are replying to as a thank-you or sign-off",
 		} {
 			if !strings.Contains(s, want) {
 				t.Errorf("comment-triggered CLAUDE.md missing %q", want)
+			}
+		}
+		for _, banned := range []string{
+			"Decide whether a reply is warranted",
+			"exit with no output",
+			"Silence is a valid and preferred way",
+			"conditional on the reply rule",
+			// #6493 review: the ledger named five retired pins but only
+			// guarded two — the missing three let the old apparatus
+			// coexist with the new sentences. Ordinary-agent scope only:
+			// the leader's no_action bullet says "DO NOT post any
+			// comment", which none of these match.
+			"produced actual work",
+			"pure acknowledgment / thanks / sign-off",
+			"do NOT reply",
+			// Leader-leak guard: the carve-out imperative is
+			// leader-brief-only.
+			"Unless your outcome is",
+		} {
+			if strings.Contains(s, banned) {
+				t.Errorf("comment-triggered CLAUDE.md still carries retired no-reply text %q", banned)
 			}
 		}
 	})
@@ -5045,15 +5065,24 @@ func TestInjectRuntimeConfigSquadLeaderCommentTriggeredNoAction(t *testing.T) {
 	}
 	s := string(data)
 
-	// The comment-triggered workflow must contain the squad leader no_action rule.
+	// The comment-triggered workflow must contain the squad leader no_action
+	// rule, and the reply imperative must carry the no_action carve-out so a
+	// later bullet never contradicts it (MUL-5442 #6493 review).
 	for _, want := range []string{
 		"Squad leader rule",
 		"DO NOT post any comment",
 		"multica squad activity",
+		"Unless your outcome is `no_action` (Squad leader rule above), posting your reply as a comment is mandatory",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("squad leader comment-triggered CLAUDE.md missing %q", want)
 		}
+	}
+	// Capital-P form = the ordinary unconditional bullet; the leader brief
+	// must carry only the carve-out variant (its lowercase "posting your
+	// reply as a comment is mandatory" tail is expected and legal).
+	if strings.Contains(s, "Posting your reply as a comment is mandatory") {
+		t.Errorf("squad leader CLAUDE.md still carries the unconditional reply bullet")
 	}
 
 	// The Output section must use strong prohibition language.

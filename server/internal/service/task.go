@@ -3624,7 +3624,25 @@ func (s *TaskService) writeChatCompletionOutcome(ctx context.Context, qtx *db.Qu
 	switch {
 	case !isEmpty:
 		params.Content = redact.Text(body)
-		// message_kind left NULL → COALESCE defaults to 'message'.
+		// message_kind left NULL → COALESCE defaults to 'message'. The one
+		// exception: the reply to the hidden onboarding kickoff self-describes
+		// as the opening, which is what makes chat render the starter cards
+		// under it — the kickoff row itself never reaches clients (MUL-5765).
+		//
+		// Keyed on chatInputOwnerID, not task.ID: an auto-retry clone gets a
+		// fresh id while inheriting the root's chat_input_task_id (MUL-4351),
+		// and the kickoff user row stays bound to the root. Asking about the
+		// child's own id would answer false, so an opening that only landed
+		// after a retriable failure would persist as a plain 'message' — no
+		// starter cards, and chips generated for a turn whose copy points at
+		// cards that never render.
+		kickoff, err := qtx.TaskHasOnboardingKickoffInput(ctx, chatInputOwnerID(task))
+		if err != nil {
+			return nil, fmt.Errorf("check onboarding kickoff input: %w", err)
+		}
+		if kickoff {
+			params.MessageKind = pgtype.Text{String: protocol.ChatMessageKindOnboardingOpening, Valid: true}
+		}
 	case pendingAttachments > 0:
 		// Image/file-only reply: a real 'message' outcome with empty text — the
 		// attachment cards ARE the response, so it must not read as no_response.
@@ -4074,6 +4092,17 @@ func ResumeUnsafeFailure(failureReason, errorText string) bool {
 	}
 	lower := strings.ToLower(errorText)
 	if strings.Contains(lower, "400") && strings.Contains(lower, "invalid_request_error") {
+		return true
+	}
+	// Provider credential-resolution failures are deterministic on resume: the
+	// missing api_key / auth_token / auth header is baked into the session's
+	// provider state, so a rerun must start fresh instead of replaying the same
+	// auth error on the recorded (agent, issue) session. taskfailure.Classify
+	// deliberately leaves this error as agent_error.unknown, so this
+	// reason-independent text guard is the load-bearing protection for both new
+	// and already persisted rows. Keep it in sync with the GetLastTaskSession /
+	// GetLastChatTaskSession resume queries.
+	if strings.Contains(lower, "could not resolve authentication method") {
 		return true
 	}
 	// Same defense-in-depth for the provider-agnostic empty-message shape:

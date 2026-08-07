@@ -200,6 +200,12 @@ export type {
   RedeemSlackBindingTokenResponse,
 } from "./slack";
 export type {
+  DingTalkInstallation,
+  ListDingTalkInstallationsResponse,
+  RegisterDingTalkBYORequest,
+  RedeemDingTalkBindingTokenResponse,
+} from "./dingtalk";
+export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,
