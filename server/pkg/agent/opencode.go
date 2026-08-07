@@ -305,20 +305,20 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 	awaitingContinuation := false    // the last step_finish still required another step
 
 	// Step bracketing still misses a third shape: a step that opens and closes
-	// cleanly while carrying nothing at all — no text, no tool call, and an
-	// all-zero token block (#6522, observed as step_finish reason "unknown" with
-	// every token counter and the cost at 0). Zero input tokens means the
-	// provider round-trip never happened, so that step is a dead stream wearing
-	// a clean finish, and ending a run on one is another false-green completion.
+	// cleanly while carrying nothing at all — no text, no tool call, and no
+	// reported usage whatsoever (#6522, observed as step_finish reason "unknown"
+	// with every token counter and the cost at 0). No usage means the provider
+	// round-trip never happened, so that step is a dead stream wearing a clean
+	// finish, and ending a run on one is another false-green completion.
 	//
 	// The criterion is deliberately "this step produced nothing", NOT "the run
 	// produced no text": a task whose only deliverable is a tool side effect is
 	// legitimate and must stay green. Any single sign of life — text, a tool
-	// call, or any non-zero token counter — keeps the step productive. This is
-	// also why the reason itself is not consulted: a missing or unrecognised
-	// reason stays terminal for protocol compatibility (see the back-compat
-	// regression), and voidness is orthogonal to it.
-	stepProducedOutput := false // current step emitted text, a tool call, or token usage
+	// call, or any usage field the protocol reports — keeps the step productive.
+	// This is also why the reason itself is not consulted: a missing or
+	// unrecognised reason stays terminal for protocol compatibility (see the
+	// back-compat regression), and voidness is orthogonal to it.
+	stepProducedOutput := false // current step emitted text, a tool call, or reported usage
 	lastStepVoid := false       // the most recently closed step produced nothing at all
 
 	scanner := newAgentStreamScanner(r)
@@ -363,9 +363,10 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 			awaitingContinuation = event.Part.Reason == "tool-calls" ||
 				(event.Part.Reason != "" && stepHasContinuationTool)
 			stepHasContinuationTool = false
-			// Accumulate token usage from step_finish events. Any non-zero
-			// counter is also proof the provider round-trip really happened,
-			// which keeps the step out of the void-step guard below.
+			// Accumulate token usage from step_finish events. Only the fields
+			// TokenUsage models are billed; every reported field additionally
+			// counts as proof the provider round-trip happened, which is what
+			// keeps a productive step out of the void-step guard below.
 			if t := event.Part.Tokens; t != nil {
 				usage.InputTokens += t.Input
 				usage.OutputTokens += t.Output
@@ -373,10 +374,9 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 					usage.CacheReadTokens += t.Cache.Read
 					usage.CacheWriteTokens += t.Cache.Write
 				}
-				if t.Input > 0 || t.Output > 0 ||
-					(t.Cache != nil && (t.Cache.Read > 0 || t.Cache.Write > 0)) {
-					stepProducedOutput = true
-				}
+			}
+			if stepReportedUsage(&event.Part) {
+				stepProducedOutput = true
 			}
 			lastStepVoid = !stepProducedOutput
 		}
@@ -410,7 +410,7 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 			noTerminalSignal = true
 		case lastStepVoid:
 			finalStatus = "failed"
-			finalError = "opencode stream ended on an empty step (no text, no tool call, no token usage) — the provider produced nothing"
+			finalError = "opencode stream ended on an empty step (no text, no tool call, no reported usage) — the provider produced nothing"
 			noTerminalSignal = true
 		}
 	}
@@ -423,6 +423,35 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 		usage:            usage,
 		noTerminalSignal: noTerminalSignal,
 	}
+}
+
+// stepReportedUsage reports whether a step_finish part carries any evidence
+// that the provider round-trip actually happened.
+//
+// OpenCode's protocol keeps reasoning and the aggregate total in fields of
+// their own alongside input/output/cache, and reports cost as a sibling of the
+// whole token block — a step can legitimately land with reasoning or cost
+// positive while input and output are both zero. Checking only input/output
+// would therefore call such a step void and fail a healthy run, so every field
+// the protocol reports counts. Only an across-the-board zero means no model
+// call happened.
+//
+// The reasoning and total counters are read as evidence only, deliberately not
+// folded into TokenUsage: total is derived (adding it would double-count) and
+// TokenUsage has no reasoning bucket, so recording either here would change
+// billing figures rather than fix this bug.
+func stepReportedUsage(part *opencodeEventPart) bool {
+	if part.Cost > 0 {
+		return true
+	}
+	t := part.Tokens
+	if t == nil {
+		return false
+	}
+	if t.Input > 0 || t.Output > 0 || t.Reasoning > 0 || t.Total > 0 {
+		return true
+	}
+	return t.Cache != nil && (t.Cache.Read > 0 || t.Cache.Write > 0)
 }
 
 func (b *opencodeBackend) handleTextEvent(event opencodeEvent, ch chan<- Message, output *strings.Builder) {
@@ -594,6 +623,11 @@ type opencodeEventPart struct {
 	// step_finish token usage
 	Tokens *opencodeTokens `json:"tokens,omitempty"`
 
+	// step_finish cost, a sibling of the token block rather than a member of
+	// it. Read only as round-trip evidence by stepReportedUsage; opencode's
+	// billing figures come from the token counters above.
+	Cost float64 `json:"cost,omitempty"`
+
 	// step_finish reason (FinishReason: "stop", "tool-calls", …). Absent on
 	// older opencode versions whose step-finish parts predate the field.
 	Reason string `json:"reason,omitempty"`
@@ -603,11 +637,16 @@ type opencodePartMetadata struct {
 	ProviderExecuted bool `json:"providerExecuted,omitempty"`
 }
 
-// opencodeTokens represents token usage in a step_finish event.
+// opencodeTokens represents token usage in a step_finish event. Reasoning and
+// Total are separate counters in the protocol, not components of Input/Output,
+// so a step can report either while both of those are zero; they are parsed so
+// stepReportedUsage can see them.
 type opencodeTokens struct {
-	Input  int64                `json:"input"`
-	Output int64                `json:"output"`
-	Cache  *opencodeCacheTokens `json:"cache,omitempty"`
+	Input     int64                `json:"input"`
+	Output    int64                `json:"output"`
+	Reasoning int64                `json:"reasoning,omitempty"`
+	Total     int64                `json:"total,omitempty"`
+	Cache     *opencodeCacheTokens `json:"cache,omitempty"`
 }
 
 type opencodeCacheTokens struct {

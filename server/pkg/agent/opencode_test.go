@@ -1042,6 +1042,12 @@ func TestOpencodeProcessEventsEmptyFinalStepFails(t *testing.T) {
 	if !strings.Contains(result.errMsg, "empty step") {
 		t.Errorf("errMsg: got %q, want it to name the empty step", result.errMsg)
 	}
+	// The error text is the input to taskfailure.Classify, which routes this
+	// failure to the retryable provider_network bucket — see the matching
+	// cases in pkg/taskfailure/classify_test.go. Keep the two in sync.
+	if !strings.HasPrefix(result.errMsg, "opencode stream ended") {
+		t.Errorf("errMsg: got %q, want the classifier's opencode stream-ended prefix", result.errMsg)
+	}
 	if !result.noTerminalSignal {
 		t.Error("noTerminalSignal: got false, want true")
 	}
@@ -1114,35 +1120,69 @@ func TestOpencodeProcessEventsToolOnlyFinalStepStaysCompleted(t *testing.T) {
 	close(ch)
 }
 
-func TestOpencodeProcessEventsTokenOnlyFinalStepStaysCompleted(t *testing.T) {
+func TestOpencodeProcessEventsUsageOnlyFinalStepStaysCompleted(t *testing.T) {
 	t.Parallel()
 
-	b := &opencodeBackend{cfg: Config{Logger: slog.Default()}}
-	ch := make(chan Message, 256)
-
-	// A step that emitted neither text nor a tool call but reports real token
-	// usage did reach the provider. Whatever it spent those tokens on (a
-	// reasoning-only turn, output the CLI chose not to stream), it is not the
-	// zero-round-trip shape the guard targets, so it must stay green.
-	lines := strings.Join([]string{
-		`{"type":"step_start","timestamp":1000,"sessionID":"ses_tokens","part":{"type":"step-start"}}`,
-		`{"type":"text","timestamp":1001,"sessionID":"ses_tokens","part":{"type":"text","text":"answer"}}`,
-		`{"type":"step_finish","timestamp":1002,"sessionID":"ses_tokens","part":{"type":"step-finish","reason":"stop","tokens":{"input":900,"output":40,"cache":{"write":0,"read":0}}}}`,
-		`{"type":"step_start","timestamp":1003,"sessionID":"ses_tokens","part":{"type":"step-start"}}`,
-		`{"type":"reasoning","timestamp":1004,"sessionID":"ses_tokens","part":{"type":"reasoning","text":"thinking..."}}`,
-		`{"type":"step_finish","timestamp":1005,"sessionID":"ses_tokens","part":{"type":"step-finish","reason":"stop","tokens":{"input":950,"output":0,"cache":{"write":0,"read":0}}}}`,
-	}, "\n")
-
-	result := b.processEvents(strings.NewReader(lines), ch)
-
-	if result.status != "completed" {
-		t.Errorf("status: got %q, want %q (non-zero tokens prove the provider round-trip happened)", result.status, "completed")
+	// A step that emitted neither text nor a tool call but reports usage did
+	// reach the provider, so it is not the zero-round-trip shape the guard
+	// targets and must stay green. OpenCode reports reasoning and the
+	// aggregate total in their own fields and cost as a sibling of the token
+	// block, so each of them alone has to be enough — a guard that only looked
+	// at input/output would fail these healthy runs.
+	usageCases := []struct {
+		name  string
+		final string
+	}{
+		{
+			name:  "input only",
+			final: `{"type":"step_finish","timestamp":1005,"sessionID":"ses_usage","part":{"type":"step-finish","reason":"stop","tokens":{"input":950,"output":0,"cache":{"write":0,"read":0}}}}`,
+		},
+		{
+			name:  "reasoning only",
+			final: `{"type":"step_finish","timestamp":1005,"sessionID":"ses_usage","part":{"type":"step-finish","reason":"stop","tokens":{"input":0,"output":0,"reasoning":82,"cache":{"write":0,"read":0}}}}`,
+		},
+		{
+			name:  "aggregate total only",
+			final: `{"type":"step_finish","timestamp":1005,"sessionID":"ses_usage","part":{"type":"step-finish","reason":"stop","tokens":{"total":14674,"input":0,"output":0,"cache":{"write":0,"read":0}}}}`,
+		},
+		{
+			name:  "cost only",
+			final: `{"type":"step_finish","timestamp":1005,"sessionID":"ses_usage","part":{"type":"step-finish","reason":"stop","tokens":{"input":0,"output":0,"cache":{"write":0,"read":0}},"cost":0.0021}}`,
+		},
+		{
+			name:  "cache read only",
+			final: `{"type":"step_finish","timestamp":1005,"sessionID":"ses_usage","part":{"type":"step-finish","reason":"stop","tokens":{"input":0,"output":0,"cache":{"write":0,"read":512}}}}`,
+		},
 	}
-	if result.errMsg != "" {
-		t.Errorf("errMsg: got %q, want empty", result.errMsg)
-	}
 
-	close(ch)
+	for _, tc := range usageCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			b := &opencodeBackend{cfg: Config{Logger: slog.Default()}}
+			ch := make(chan Message, 256)
+
+			lines := strings.Join([]string{
+				`{"type":"step_start","timestamp":1000,"sessionID":"ses_usage","part":{"type":"step-start"}}`,
+				`{"type":"text","timestamp":1001,"sessionID":"ses_usage","part":{"type":"text","text":"answer"}}`,
+				`{"type":"step_finish","timestamp":1002,"sessionID":"ses_usage","part":{"type":"step-finish","reason":"stop","tokens":{"input":900,"output":40,"cache":{"write":0,"read":0}}}}`,
+				`{"type":"step_start","timestamp":1003,"sessionID":"ses_usage","part":{"type":"step-start"}}`,
+				`{"type":"reasoning","timestamp":1004,"sessionID":"ses_usage","part":{"type":"reasoning","text":"thinking..."}}`,
+				tc.final,
+			}, "\n")
+
+			result := b.processEvents(strings.NewReader(lines), ch)
+
+			if result.status != "completed" {
+				t.Errorf("status: got %q, want %q (reported usage proves the provider round-trip happened)", result.status, "completed")
+			}
+			if result.errMsg != "" {
+				t.Errorf("errMsg: got %q, want empty", result.errMsg)
+			}
+
+			close(ch)
+		})
+	}
 }
 
 // ── Windows native-binary resolution tests ──
