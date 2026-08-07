@@ -5584,7 +5584,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// resolves to, paired with the path by resolveAgentEntry so a just-upgraded
 	// codex is never launched under the previous version's policy (MUL-4486).
 	var resolvedVersion string
+	// usesCustomProfileCommand distinguishes "this provider's own binary" from
+	// "some other binary speaking this provider's protocol". Backends need it
+	// for compatibility exceptions verified against a specific vendor's CLI,
+	// which must not extend to arbitrary commands sharing a protocol family.
+	var usesCustomProfileCommand bool
 	if customSpec, isCustom := d.customProfileLaunchForRuntime(task.RuntimeID); isCustom {
+		usesCustomProfileCommand = true
 		entry.Path = customSpec.path
 		resolvedVersion = customSpec.version
 		profileFixedArgs = customSpec.fixedArgs
@@ -6052,6 +6058,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		RuntimeID:      task.RuntimeID,
 		DaemonVersion:  d.cfg.CLIVersion,
 		CodexVersion:   codexVersion,
+		BuiltinRuntime: !usesCustomProfileCommand,
 	})
 	if err != nil {
 		return TaskResult{}, fmt.Errorf("create agent backend: %w", err)
