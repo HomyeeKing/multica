@@ -1,0 +1,184 @@
+-- Inbox v2 (route B): inbox_item keeps its role as the event table and gains
+-- group columns; inbox_group holds the per-person state the product has always
+-- operated on.
+--
+-- Nothing calls these until the write gate is opened.
+
+-- name: GetInboxV2WriteEnabled :one
+-- Read inside the delivery transaction. See migration 274 for why the gate is a
+-- row rather than a process-level flag.
+SELECT write_enabled FROM inbox_v2_cutover WHERE id = true;
+
+-- name: SetInboxV2WriteEnabled :exec
+UPDATE inbox_v2_cutover SET write_enabled = @write_enabled, updated_at = now()
+WHERE id = true;
+
+-- name: FindInboxItemByDeliveryKey :one
+-- Idempotency probe for a new delivery. Only an optimisation: two concurrent
+-- transactions can both miss it, and inbox_item_delivery_key_uidx is what
+-- actually decides the winner.
+SELECT * FROM inbox_item WHERE delivery_key = @delivery_key;
+
+-- name: AcquireInboxGroup :one
+-- Get-or-create the group and hold its row lock for the rest of the
+-- transaction. ON CONFLICT DO UPDATE rather than DO NOTHING: DO NOTHING returns
+-- no row and takes no lock, leaving the caller to issue a second
+-- SELECT ... FOR UPDATE and race between the two. The no-op SET keeps the row
+-- unchanged while still locking it.
+--
+-- This lock is the fixed point in the lock order every write path shares:
+-- group first, then its items.
+INSERT INTO inbox_group (
+    workspace_id, recipient_id, source_kind, source_id, latest_event_at, surfaced_at
+) VALUES (
+    @workspace_id, @recipient_id, @source_kind, @source_id, @now, @now
+)
+ON CONFLICT (workspace_id, recipient_id, source_kind, source_id)
+DO UPDATE SET updated_at = inbox_group.updated_at
+RETURNING *;
+
+-- name: InsertInboxItemForGroup :one
+-- The delivery itself. event_seq and created_at are supplied by the caller,
+-- which computed them under the group lock it already holds.
+--
+-- created_at is monotonic within the group: the caller passes
+-- max(now, group.latest_event_at + 1us). Two deliveries in the same millisecond,
+-- or a node whose clock is behind, would otherwise produce a created_at ordering
+-- that disagrees with event_seq — and the legacy endpoints sort by created_at,
+-- so the v1 and v2 views would pick different representative rows for the same
+-- group.
+INSERT INTO inbox_item (
+    workspace_id, recipient_type, recipient_id, type, severity, issue_id,
+    title, body, actor_type, actor_id, details,
+    group_id, event_seq, target_kind, target_id, delivery_key,
+    read, archived, created_at
+) VALUES (
+    @workspace_id, 'member', @recipient_id, @type, @severity, @issue_id,
+    @title, @body, @actor_type, @actor_id, @details,
+    @group_id, @event_seq, @target_kind, @target_id, @delivery_key,
+    false, false, @created_at
+)
+RETURNING *;
+
+-- name: AdvanceInboxGroupForItem :one
+-- Second half of the delivery, same transaction. Clearing archived_at is the
+-- "archive is not unsubscribe" rule: a new event pulls an archived group back
+-- into the inbox.
+UPDATE inbox_group
+SET latest_seq      = @event_seq,
+    latest_event_id = @event_id,
+    latest_event_at = @created_at,
+    surfaced_at     = @created_at,
+    archived_at     = NULL,
+    state_version   = state_version + 1,
+    updated_at      = @now
+WHERE id = @id
+RETURNING *;
+
+-- name: RefreshInboxItemMirror :execrows
+-- Push the group's state back onto the legacy booleans every v1 client reads.
+--
+-- The invariant, in full:
+--   archived = the group is archived
+--   read     = true for every row EXCEPT the representative one while the group
+--              is unread
+--
+-- Only the representative row goes unread because that is the single row v1
+-- clients fold a group down to; marking the whole history unread would make the
+-- old raw-row count report a group as N unread items instead of one.
+--
+-- The IS DISTINCT FROM guard is not cosmetic. Without it every delivery rewrites
+-- every row of the group, so a busy issue turns one insert into an update of its
+-- entire history — and each of those updates is a new row version Postgres has
+-- to vacuum.
+UPDATE inbox_item i
+SET read     = CASE WHEN g.unread AND i.event_seq = g.latest_seq THEN false ELSE true END,
+    archived = g.want_archived
+FROM (
+    SELECT id,
+           (archived_at IS NOT NULL) AS want_archived,
+           (manual_unread OR read_through_seq < latest_seq) AS unread,
+           latest_seq
+    FROM inbox_group
+    WHERE inbox_group.id = @group_id
+) g
+WHERE i.group_id = g.id
+  AND (
+        i.read IS DISTINCT FROM (CASE WHEN g.unread AND i.event_seq = g.latest_seq THEN false ELSE true END)
+     OR i.archived IS DISTINCT FROM g.want_archived
+      );
+
+-- name: GetInboxGroupForRecipient :one
+-- Every single-group read is scoped by owner rather than trusting a bare id: a
+-- UUID arriving from a request is not proof of ownership.
+SELECT * FROM inbox_group
+WHERE id = @id AND workspace_id = @workspace_id AND recipient_id = @recipient_id;
+
+-- name: RecomputeInboxGroupRepresentative :one
+-- Recompute latest_* from the surviving rows, DOWNWARD as well as upward.
+--
+-- This is why latest_* cannot simply be advanced on insert and left alone.
+-- Event-level dismissal still exists: when an issue completes it retires that
+-- issue's stale task_failed row, and if that row was the representative the
+-- group has to fall back to the newest survivor. read_through_seq is clamped to
+-- the new latest so a cursor that had passed the removed event does not sit
+-- above the group's own head and report it permanently read.
+UPDATE inbox_group g
+SET latest_seq       = COALESCE(s.max_seq, 0),
+    latest_event_id  = s.max_id,
+    latest_event_at  = COALESCE(s.max_at, g.latest_event_at),
+    read_through_seq = LEAST(g.read_through_seq, COALESCE(s.max_seq, 0)),
+    state_version    = g.state_version + 1,
+    updated_at       = @now
+FROM (
+    SELECT
+        (SELECT event_seq FROM inbox_item WHERE group_id = @id ORDER BY event_seq DESC LIMIT 1) AS max_seq,
+        (SELECT id         FROM inbox_item WHERE group_id = @id ORDER BY event_seq DESC LIMIT 1) AS max_id,
+        (SELECT created_at FROM inbox_item WHERE group_id = @id ORDER BY event_seq DESC LIMIT 1) AS max_at
+) s
+WHERE g.id = @id
+RETURNING g.*;
+
+-- name: ClaimInboxItemsForGroup :execrows
+-- Lazy migration: attach a batch of this person's unclaimed rows to a group and
+-- number them.
+--
+-- Numbering follows (created_at, id) so the sequence a historical row gets
+-- matches the order v1 clients already display it in — otherwise the two views
+-- would disagree about which row is the representative. id breaks ties because
+-- created_at alone is not unique in the legacy data.
+WITH numbered AS (
+    SELECT id,
+           ROW_NUMBER() OVER (ORDER BY created_at, id) AS seq
+    FROM inbox_item
+    WHERE inbox_item.workspace_id = @workspace_id
+      AND inbox_item.recipient_type = 'member'
+      AND inbox_item.recipient_id = @recipient_id
+      AND inbox_item.issue_id IS NOT DISTINCT FROM sqlc.narg('issue_id')
+      AND inbox_item.group_id IS NULL
+)
+UPDATE inbox_item i
+SET group_id  = @group_id,
+    event_seq = numbered.seq
+FROM numbered
+WHERE i.id = numbered.id;
+
+-- name: ListUnclaimedInboxSources :many
+-- The distinct sources a person still has unclaimed rows for. One group is
+-- created per row of this result.
+--
+-- issue_id IS NULL rows each become their own standalone group, so they are
+-- returned individually rather than folded together.
+SELECT issue_id, workspace_id, COUNT(*) AS row_count
+FROM inbox_item
+WHERE recipient_type = 'member'
+  AND recipient_id = @recipient_id
+  AND group_id IS NULL
+GROUP BY issue_id, workspace_id;
+
+-- name: CountUnclaimedInboxItems :one
+-- Budget check for the lazy migration: above the threshold the request returns
+-- not_ready and the work moves to the background instead of blocking a page
+-- load behind an unbounded scan.
+SELECT COUNT(*) FROM inbox_item
+WHERE recipient_type = 'member' AND recipient_id = @recipient_id AND group_id IS NULL;

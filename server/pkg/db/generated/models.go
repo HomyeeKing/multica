@@ -646,6 +646,12 @@ type InboxItem struct {
 	DeliveryKey   pgtype.Text        `json:"delivery_key"`
 }
 
+type InboxV2Cutover struct {
+	ID           bool               `json:"id"`
+	WriteEnabled bool               `json:"write_enabled"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Issue struct {
 	ID                 pgtype.UUID        `json:"id"`
 	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
