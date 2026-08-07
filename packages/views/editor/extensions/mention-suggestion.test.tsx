@@ -994,4 +994,138 @@ describe("MentionList cancelled demotion", () => {
     });
     expect(issueLabels()).toEqual(["MUL-21", "MUL-20"]);
   });
+
+  // Cross-type half of MUL-5824. Context mentions aggregate two independently
+  // ranked responses — issues then projects, both tagged `search` — so per-type
+  // ranking alone left a cancelled project above a live issue, and cancelled
+  // search rows were exempted from the client partition entirely.
+  describe("mixed issue/project results", () => {
+    // Rendered order of every result row: issue rows put their identifier in
+    // the leading font-medium span, project rows their title.
+    const rowLabels = () =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+        .map((b) => b.querySelector("span.font-medium")?.textContent ?? "")
+        .filter((label) => label !== "");
+
+    const headings = () =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>("div.uppercase"),
+      ).map((el) => el.textContent ?? "");
+
+    it("keeps a cancelled project below a live issue in the search results", async () => {
+      searchIssuesMock.mockResolvedValue({
+        issues: [
+          { id: "i-live", identifier: "MUL-31", title: "Live issue", status: "todo" },
+        ],
+        total: 1,
+      });
+      searchProjectsMock.mockResolvedValue({
+        projects: [
+          { id: "p-dead", title: "Dead project", description: null, icon: null, status: "cancelled" },
+        ],
+        total: 1,
+      });
+
+      render(
+        <I18nWrapper>
+          <MentionList items={[]} query="thing" command={vi.fn()} includeProjectSearch />
+        </I18nWrapper>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Dead project")).toBeInTheDocument();
+      });
+      expect(rowLabels()).toEqual(["MUL-31", "Dead project"]);
+      expect(headings()).toEqual(["Search results", "Cancelled"]);
+    });
+
+    it("demotes cancelled search results of both types below every live row", async () => {
+      searchIssuesMock.mockResolvedValue({
+        issues: [
+          { id: "i-dead", identifier: "MUL-41", title: "Dead issue", status: "cancelled" },
+          { id: "i-live", identifier: "MUL-42", title: "Live issue", status: "in_review" },
+        ],
+        total: 2,
+      });
+      searchProjectsMock.mockResolvedValue({
+        projects: [
+          { id: "p-dead", title: "Dead project", description: null, icon: null, status: "cancelled" },
+          { id: "p-live", title: "Live project", description: null, icon: null, status: "planned" },
+        ],
+        total: 2,
+      });
+
+      render(
+        <I18nWrapper>
+          <MentionList items={[]} query="thing" command={vi.fn()} includeProjectSearch />
+        </I18nWrapper>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Live project")).toBeInTheDocument();
+      });
+      // Live rows keep their server order; both cancelled types land last.
+      expect(rowLabels()).toEqual([
+        "MUL-42",
+        "Live project",
+        "MUL-41",
+        "Dead project",
+      ]);
+    });
+
+    it("keeps a cancelled project you are currently viewing in its Current section", async () => {
+      searchIssuesMock.mockResolvedValue({ issues: [], total: 0 });
+      searchProjectsMock.mockResolvedValue({ projects: [], total: 0 });
+
+      const items: MentionItem[] = [
+        {
+          id: "p-cur",
+          label: "Current project",
+          type: "project",
+          projectStatus: "cancelled",
+          group: "current",
+        },
+        { id: "i-live", label: "MUL-51", type: "issue", status: "todo" },
+      ];
+
+      render(
+        <I18nWrapper>
+          <MentionList items={items} query="" command={vi.fn()} includeProjectSearch />
+        </I18nWrapper>,
+      );
+
+      expect(rowLabels()).toEqual(["Current project", "MUL-51"]);
+      expect(headings()).toEqual(["Current page", "Issues"]);
+    });
+
+    it("gives up slots to live rows across both types when the list overflows", async () => {
+      // 20 cancelled projects ahead of one live issue: with only 20 slots the
+      // live row is invisible unless the cross-type demotion runs BEFORE the
+      // truncation.
+      searchIssuesMock.mockResolvedValue({ issues: [], total: 0 });
+      searchProjectsMock.mockResolvedValue({ projects: [], total: 0 });
+
+      const items: MentionItem[] = [
+        ...Array.from({ length: 20 }, (_, n) => ({
+          id: `p-c${n}`,
+          label: `Dead project ${n}`,
+          type: "project" as const,
+          projectStatus: "cancelled" as const,
+        })),
+        { id: "i-live", label: "MUL-61", type: "issue", status: "todo" },
+      ];
+
+      render(
+        <I18nWrapper>
+          <MentionList items={items} query="" command={vi.fn()} includeProjectSearch />
+        </I18nWrapper>,
+      );
+
+      const labels = rowLabels();
+      expect(labels).toHaveLength(20);
+      expect(labels[0]).toBe("MUL-61");
+      // One cancelled project was dropped to make room, not the live issue.
+      expect(labels).not.toContain("Dead project 19");
+    });
+  });
 });

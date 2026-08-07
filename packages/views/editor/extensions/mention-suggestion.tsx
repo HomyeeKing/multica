@@ -106,9 +106,12 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
   const search: MentionItem[] = [];
   const users: MentionItem[] = [];
   const issues: MentionItem[] = [];
+  const cancelled: MentionItem[] = [];
 
   for (const item of items) {
-    if (item.group === "current") {
+    if (isDemotedCancelled(item)) {
+      cancelled.push(item);
+    } else if (item.group === "current") {
       current.push(item);
     } else if (item.group === "recent") {
       recent.push(item);
@@ -127,6 +130,8 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
   if (search.length > 0) groups.push({ label: "Search", items: search });
   if (users.length > 0) groups.push({ label: "Users", items: users });
   if (issues.length > 0) groups.push({ label: "Issues", items: issues });
+  // Always last: no cancelled row of any type may precede a live one.
+  if (cancelled.length > 0) groups.push({ label: "Cancelled", items: cancelled });
   return groups;
 }
 
@@ -160,31 +165,46 @@ function mergeMentionItems(
 }
 
 /**
- * Cancelled issues are abandoned work: keep them reachable but never ahead of a
- * live match. Cached rows are merged before server rows and the list is only
- * then truncated to MAX_ITEMS, so without this a locally cached cancelled issue
- * outranks every backend-ranked result and can push active issues out of the
- * window entirely — undoing the demotion the search API already applies.
+ * Cancelled work is abandoned work: keep it reachable, but never ahead of a
+ * live match and never at the cost of a live match's slot.
  *
- * Stable partition: relative order within each side is untouched, so the
- * backend ranking still decides everything else. Runs before the truncation,
- * not just before render, so cancelled rows give up their slot rather than
- * merely their position.
+ * Two independent reasons the picker needs this even though the search API
+ * already ranks cancelled results last:
  *
- * Curated groups (current / recent / search) are exempt — they are explicit
- * context rather than relevance hits, and "Current" has to survive the
- * truncation even when the issue being viewed is itself cancelled.
+ * 1. Cached rows are merged BEFORE the server rows and the list is only then
+ *    truncated to MAX_ITEMS, so a locally cached cancelled issue outranks every
+ *    backend-ranked result and can push active work out of the window.
+ * 2. Context mentions aggregate two independently ranked responses — issues
+ *    then projects, both tagged `search` — so a cancelled project still lands
+ *    above a live issue. Per-type ranking cannot fix a cross-type list.
+ *
+ * Exempt: the curated `current` / `recent` groups. They are explicit context
+ * rather than relevance hits, and "Current" has to survive the truncation even
+ * when the issue being viewed is itself cancelled. Exact-hit exemption is not
+ * needed here — the picker matches on identifier/title prefixes and the row is
+ * still listed, just in the trailing section.
  */
-function demoteCancelledIssues(items: MentionItem[]): MentionItem[] {
+function isDemotedCancelled(item: MentionItem): boolean {
+  if (item.group === "current" || item.group === "recent") return false;
+  if (item.type === "issue") return item.status === "cancelled";
+  if (item.type === "project") return item.projectStatus === "cancelled";
+  return false;
+}
+
+/**
+ * Stable cross-type partition applied BEFORE the MAX_ITEMS truncation, so
+ * cancelled rows give up their slot rather than merely their position. Relative
+ * order within each side is untouched, leaving the backend ranking in charge of
+ * everything except "live before cancelled". groupItems() then renders the
+ * cancelled side as the trailing section.
+ */
+function demoteCancelledItems(items: MentionItem[]): MentionItem[] {
   const live: MentionItem[] = [];
   const cancelled: MentionItem[] = [];
 
   for (const item of items) {
-    if (item.type === "issue" && item.status === "cancelled" && !item.group) {
-      cancelled.push(item);
-    } else {
-      live.push(item);
-    }
+    if (isDemotedCancelled(item)) cancelled.push(item);
+    else live.push(item);
   }
 
   return cancelled.length > 0 ? [...live, ...cancelled] : items;
@@ -283,7 +303,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
     const displayItems = useMemo(() => {
       const currentServerItems = searchedQuery === normalizedQuery ? serverItems : [];
-      return demoteCancelledIssues(
+      return demoteCancelledItems(
         mergeMentionItems(items, currentServerItems),
       ).slice(0, MAX_ITEMS);
     }, [items, normalizedQuery, searchedQuery, serverItems]);
@@ -382,6 +402,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       if (label === "Search") return t(($) => $.mention.group_search);
       if (label === "Users") return t(($) => $.mention.group_users);
       if (label === "Issues") return t(($) => $.mention.group_issues);
+      if (label === "Cancelled") return t(($) => $.mention.group_cancelled);
       return label;
     };
 

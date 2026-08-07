@@ -52,9 +52,13 @@ func seedRankIssue(t *testing.T, title, status string) string {
 	return title
 }
 
-// searchTitles runs SearchIssues with include_closed=true — every real caller
-// (command palette, mention picker, issue picker, mobile) sends it, so the
-// closed-exclusion branch is not what keeps cancelled work down in the product.
+// searchTitles runs SearchIssues with include_closed=true, which is what every
+// caller that can surface cancelled work sends: the web command palette, the web
+// mention picker, the issue picker, and the mobile search screen. (The mobile
+// mention picker at apps/mobile/components/issue/pickers/mention-picker-body.tsx
+// sends include_closed=false, so it never sees cancelled issues at all and the
+// ranking below cannot apply to it.) The closed-exclusion branch is therefore
+// not what keeps cancelled work down on the surfaces that do include it.
 func searchTitles(t *testing.T, q string) []string {
 	t.Helper()
 
