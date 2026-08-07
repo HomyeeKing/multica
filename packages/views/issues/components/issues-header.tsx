@@ -913,7 +913,7 @@ export function IssuesHeader({
       ? { scope_type: "project", scope_id: saveViewScope.projectId }
       : { scope_type: saveViewScope.kind }
     : null;
-  const { activeView, views, setActive, missing } = useActiveIssueView(
+  const { activeView, views, viewsReady, setActive, missing } = useActiveIssueView(
     headerWsId,
     viewListScope,
     savedViewsEnabled,
@@ -1019,6 +1019,7 @@ export function IssuesHeader({
                 },
               }))}
               views={views}
+              viewsReady={viewsReady}
               activeView={activeView}
               onSelectView={(view) => setActive(view ? view.id : null)}
               onNewView={() => {

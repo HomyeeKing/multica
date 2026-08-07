@@ -73,7 +73,7 @@ export function MyIssuesHeader({
   const savedViewsEnabled = useFeatureEnabled(SAVED_ISSUE_VIEWS_FLAG) === true;
   const saveScope: SaveViewScope = { kind: "my", variant: SAVE_VARIANT[scope] };
   const wsId = useWorkspaceId();
-  const { activeView, views, setActive, missing } = useActiveIssueView(
+  const { activeView, views, viewsReady, setActive, missing } = useActiveIssueView(
     wsId,
     { scope_type: "my" },
     savedViewsEnabled,
@@ -121,6 +121,7 @@ export function MyIssuesHeader({
                 },
               }))}
               views={views}
+              viewsReady={viewsReady}
               activeView={activeView}
               onSelectView={(view) => setActive(view ? view.id : null)}
               onNewView={() => {

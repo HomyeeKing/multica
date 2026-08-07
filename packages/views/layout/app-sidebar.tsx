@@ -308,16 +308,18 @@ function PinRow({
 
   const triggeredRef = useRef(false);
   useEffect(() => {
-    const err = isIssue
-      ? issueQuery.error
-      : isView
-        ? viewQuery.error
-        : projectQuery.error;
+    // Views are exempt from 404-auto-unpin: their endpoint also 404s when
+    // the feature flag is switched off server-side, and a session that
+    // booted with the flag on cannot tell the two apart — auto-unpinning
+    // would permanently delete every view pin on a flag flip. A deleted
+    // view's row simply hides instead.
+    if (isView) return;
+    const err = isIssue ? issueQuery.error : projectQuery.error;
     if (err instanceof ApiError && err.status === 404 && !triggeredRef.current) {
       triggeredRef.current = true;
       onUnpin();
     }
-  }, [isIssue, isView, issueQuery.error, onUnpin, projectQuery.error, viewQuery.error]);
+  }, [isIssue, isView, issueQuery.error, onUnpin, projectQuery.error]);
 
   const activeViewByContainer = useActiveIssueViewStore((s) => s.active);
   if (isView) {
@@ -325,20 +327,30 @@ function PinRow({
     if (viewQuery.isPending) return <PinSkeleton />;
     if (viewQuery.isError || !viewQuery.data) return null;
     const view = viewQuery.data;
-    const viewHref =
+    // One resolved scope drives the path AND the container key so an
+    // unrecognised scope_type from a newer backend degrades coherently.
+    const scopeType: "workspace" | "my" | "project" =
       view.scope_type === "my"
-        ? p.myIssues()
+        ? "my"
         : view.scope_type === "project" && view.scope_id
-          ? p.projectDetail(view.scope_id)
+          ? "project"
+          : "workspace";
+    const viewPath =
+      scopeType === "my"
+        ? p.myIssues()
+        : scopeType === "project"
+          ? p.projectDetail(view.scope_id!)
           : p.issues();
     const containerKey = issueViewContainerKey(wsId, {
-      scope_type: view.scope_type as "workspace" | "my" | "project",
-      scope_id: view.scope_id,
+      scope_type: scopeType,
+      scope_id: scopeType === "project" ? view.scope_id : null,
     });
     return (
       <SortablePinItem
         pin={pin}
-        href={viewHref}
+        // ?view= keeps a web reload on the view (the URL-sync hook adopts
+        // it on mount); the desktop router ignores the query harmlessly.
+        href={`${viewPath}?view=${view.id}`}
         pathname={pathname}
         onUnpin={onUnpin}
         label={view.name}
@@ -346,7 +358,7 @@ function PinRow({
         // Active only when this exact view is open on its surface — the
         // path alone also matches the plain tab.
         isActiveOverride={
-          pathname === viewHref && activeViewByContainer[containerKey] === view.id
+          pathname === viewPath && activeViewByContainer[containerKey] === view.id
         }
         onNavigate={() => setActiveView(containerKey, view.id)}
       />
@@ -526,6 +538,9 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
     setLocalPinnedWsId(wsId ?? null);
   }, [wsId]);
   const visiblePinned = localPinnedWsId === (wsId ?? null) ? localPinned : EMPTY_PINS;
+  // View pins are absent here (their href resolves async): while a view
+  // pin is active the plain nav row for its surface stays highlighted too.
+  // Accepted — suppressing it would need every view detail lifted up here.
   const isActivePinnedRoute = visiblePinned.some((pin) => pathname === getPinHref(pin));
 
   const handleDragStart = useCallback(() => {

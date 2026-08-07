@@ -45,5 +45,16 @@ export function useActiveIssueView(
     [containerKey, setActiveInStore],
   );
 
-  return { containerKey, activeViewId, activeView, views, setActive, missing };
+  return {
+    containerKey,
+    activeViewId,
+    activeView,
+    views,
+    // Preference writes prune against this list — callers must not persist
+    // a prune until it has actually loaded (an empty in-flight list would
+    // read as "every view was deleted").
+    viewsReady: listQuery.isSuccess,
+    setActive,
+    missing,
+  };
 }

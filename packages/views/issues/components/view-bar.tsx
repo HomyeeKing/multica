@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   DndContext,
@@ -73,20 +73,32 @@ function SortableBarTab({
   id: string;
   children: React.ReactNode;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+  const { listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id });
   const wasDragged = useRef(false);
-  if (isDragging) wasDragged.current = true;
+  useEffect(() => {
+    if (isDragging) {
+      wasDragged.current = true;
+      return;
+    }
+    if (!wasDragged.current) return;
+    // A drop lands as a click (swallowed below); a cancelled drag (Escape)
+    // produces none — clear the flag a tick later so the NEXT real click
+    // isn't eaten by a drag that never dropped.
+    const timer = window.setTimeout(() => {
+      wasDragged.current = false;
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isDragging]);
   return (
+    // Listeners only — dnd-kit's aria attributes would make this span a
+    // second focusable role=button wrapping the real tab button.
     <span
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn("inline-flex", isDragging && "z-10 opacity-70")}
-      {...attributes}
       {...listeners}
       onClickCapture={(event) => {
-        // A drop lands as a click on the tab — swallow it so finishing a
-        // drag never toggles the tab you happened to release over.
         if (wasDragged.current) {
           wasDragged.current = false;
           event.preventDefault();
@@ -111,6 +123,7 @@ export function ViewBar({
   scope,
   builtins,
   views,
+  viewsReady,
   activeView,
   onSelectView,
   onNewView,
@@ -120,6 +133,8 @@ export function ViewBar({
   scope: IssueViewScope;
   builtins: ViewBarBuiltin[];
   views: IssueView[];
+  /** True once the views list has actually loaded — see savePrefs. */
+  viewsReady: boolean;
   activeView: IssueView | null;
   onSelectView: (view: IssueView | null) => void;
   onNewView: () => void;
@@ -188,6 +203,11 @@ export function ViewBar({
   );
 
   const savePrefs = (next: { hidden: string[]; order: string[] }) => {
+    // A drag can land before the views list has loaded; pruning against an
+    // in-flight (empty) list would persist "every saved view was deleted"
+    // and wipe the user's order and hidden sets. Drop the write instead —
+    // the gesture is re-doable one moment later.
+    if (!viewsReady) return;
     // Prune ids that no longer resolve so deleted views don't accumulate.
     const known = new Set(items.map((item) => item.barItemId));
     updatePreference.mutate({
@@ -202,8 +222,9 @@ export function ViewBar({
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    // Reorder within the FULL ordered document (hidden items keep their
-    // slots) so the bar and the manage dialog stay one list.
+    // Reorder within the FULL ordered document so the bar and the manage
+    // dialog edit one list; the dragged item lands adjacent to the drop
+    // target, and hidden items ride along with their neighbours.
     const ids = ordered.map((item) => item.barItemId);
     const from = ids.indexOf(String(active.id));
     const to = ids.indexOf(String(over.id));
