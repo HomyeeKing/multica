@@ -166,8 +166,6 @@ export function AgentCreatePanel({
   const lastActorType = useQuickCreateStore((s) => s.lastActorType);
   const lastActorId = useQuickCreateStore((s) => s.lastActorId);
   const setLastActor = useQuickCreateStore((s) => s.setLastActor);
-  const lastProjectId = useQuickCreateStore((s) => s.lastProjectId);
-  const setLastProjectId = useQuickCreateStore((s) => s.setLastProjectId);
   const visibleFields = useIssueCreateSettingsStore((s) => s.quickCreateFields);
   const keepOpen = useQuickCreateStore((s) => s.keepOpen);
   const setKeepOpen = useQuickCreateStore((s) => s.setKeepOpen);
@@ -250,14 +248,16 @@ export function AgentCreatePanel({
     return visibleSquads.find((s) => s.id === actor.id);
   }, [actor, visibleSquads]);
 
-  // Unfinished selections live in the shared issue-create draft. Last-successful
-  // actor/project values remain separate fallbacks, so closing a draft never
-  // overwrites the defaults established by an actual create.
+  // Unfinished selections live in the shared issue-create draft. The
+  // last-successful actor remains a separate fallback, so closing a draft
+  // never overwrites the default established by an actual create.
+  //
+  // Project has exactly two seeds, both carrying explicit user intent: the
+  // project page (or manual panel) the modal was opened from, and the user's
+  // own unfinished draft. It is deliberately NOT seeded from the last create
+  // — see quick-create-store (MUL-5862).
   const [projectId, setProjectId] = useState<string | null>(() => {
-    const seed =
-      (data?.project_id as string | undefined) ??
-      draft.shared.projectId ??
-      lastProjectId;
+    const seed = (data?.project_id as string | undefined) ?? draft.shared.projectId;
     return seed ?? null;
   });
   const [priority, setPriority] = useState<IssuePriority>(
@@ -287,9 +287,9 @@ export function AgentCreatePanel({
   // Stale-id sweep. Once the project list query has actually resolved
   // (`isSuccess` — distinct from "data is the empty default during loading"),
   // a `projectId` that isn't in the list means the project was deleted in
-  // another session. Clear local state, the unfinished draft, and the
-  // last-successful preference; dropping any persisted copy would make the
-  // next open re-seed and submit the same dead value.
+  // another session. Clear local state AND the unfinished draft — the draft
+  // is the only persisted copy left, and leaving it would make the next open
+  // re-seed and submit the same dead value.
   useEffect(() => {
     if (!projectsLoaded || projectId === null) return;
     if (projects.some((p) => p.id === projectId)) return;
@@ -297,16 +297,7 @@ export function AgentCreatePanel({
     if (draft.shared.projectId === projectId) {
       setShared({ projectId: undefined });
     }
-    if (lastProjectId === projectId) setLastProjectId(null);
-  }, [
-    projectsLoaded,
-    projects,
-    projectId,
-    draft.shared.projectId,
-    lastProjectId,
-    setShared,
-    setLastProjectId,
-  ]);
+  }, [projectsLoaded, projects, projectId, draft.shared.projectId, setShared]);
 
   // Mark the persisted draft's active mode so a later reopen and any reader of
   // the unified draft know which form is being edited.
@@ -426,7 +417,6 @@ export function AgentCreatePanel({
           ...(activeAttachmentIds.length > 0 ? { attachment_ids: activeAttachmentIds } : {}),
         });
         setLastActor(actor.type, actor.id);
-        setLastProjectId(projectId);
         setLastMode("agent");
         toast.success(t(($) => $.create_issue.agent.toast_sent), {
           duration: 4000,
