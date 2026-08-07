@@ -280,6 +280,59 @@ func TestTaskFailureClassifiers(t *testing.T) {
 	}
 }
 
+// TestOpencodeStreamEndedFailureRetries walks the full chain for #6522: the
+// error string pkg/agent/opencode.go's terminal-signal guard produces, through
+// taskfailure.Classify, into the retry gate.
+//
+// The trap this guards: a run that ends on an empty step now goes red instead
+// of false-green, but that alone delivers nothing. The reason it classifies to
+// has to be on retryableReasons, or the task simply dies with a better label
+// and max_attempts never applies — which is exactly where these three errors
+// used to land (process_failure for the two "terminal signal" variants, via
+// the word "signal", and unknown for the empty-step one).
+func TestOpencodeStreamEndedFailureRetries(t *testing.T) {
+	guardErrors := []struct {
+		name   string
+		errMsg string
+	}{
+		{"empty final step", "opencode stream ended on an empty step (no text, no tool call, no reported usage) — the provider produced nothing"},
+		{"step open at EOF", "opencode stream ended without a terminal signal (step still open at EOF)"},
+		{"continuation never started", "opencode stream ended without a terminal signal (last step required a continuation that never started)"},
+	}
+
+	mkTask := func(attempt, max int32) db.AgentTaskQueue {
+		return db.AgentTaskQueue{
+			Attempt:     attempt,
+			MaxAttempts: max,
+			IssueID:     pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+		}
+	}
+
+	for _, tc := range guardErrors {
+		t.Run(tc.name, func(t *testing.T) {
+			reason := taskfailure.Classify(tc.errMsg).String()
+			if reason != string(taskfailure.ReasonAgentProviderNetwork) {
+				t.Fatalf("Classify(%q) = %q, want %q", tc.errMsg, reason, taskfailure.ReasonAgentProviderNetwork)
+			}
+			// Resume-safe, so the retry child inherits the session and
+			// continues rather than redoing the work already paid for.
+			if resumeUnsafeFailureReason(reason) {
+				t.Errorf("resumeUnsafeFailureReason(%q) = true, want false", reason)
+			}
+			// With an attempt left, the failure produces a retry task.
+			if !retryEligible(reason, mkTask(1, 2)) {
+				t.Errorf("retryEligible(%q, attempt=1/max=2) = false, want true", reason)
+			}
+			// And still terminates once the ceiling is reached, so a
+			// deterministically broken provider cannot loop forever.
+			if retryEligible(reason, mkTask(providerNetworkMaxAttempts, 2)) {
+				t.Errorf("retryEligible(%q, attempt=%d/max=2) = true, want false at the ceiling",
+					reason, providerNetworkMaxAttempts)
+			}
+		})
+	}
+}
+
 // TestSkillBundleFailureFromLegacyDaemonRetries is the mixed-version
 // regression for MUL-5370. It walks the exact chain FailTask runs for a task
 // an un-upgraded daemon just failed, and asserts the user-visible outcome:

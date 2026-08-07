@@ -178,9 +178,22 @@ func Classify(rawError string) Reason {
 	//    Note this only catches deadlines that arrive as a bare string;
 	//    callers holding the error value should classify structurally
 	//    instead (see taskRunFailureReason in daemon/daemon.go).
+	//    "opencode stream ended" is the shared prefix of every failure the
+	//    OpenCode terminal-signal guard raises (pkg/agent/opencode.go): a step
+	//    left open at EOF, a continuation that never started, and a run that
+	//    ended on a step with no text, no tool call and no reported usage.
+	//    All three mean the same thing — the provider stream died and
+	//    `opencode run` still exited 0 — which is this bucket by definition,
+	//    and being resume-safe the retry continues the truncated session
+	//    instead of redoing the work. Before this they landed in
+	//    agent_error.process_failure (the word "signal" in "terminal signal"
+	//    matching rule 13 by accident) and agent_error.unknown respectively;
+	//    neither is on the retry allowlist, so a transient cut ended the task
+	//    outright and max_attempts never applied (#6522).
 	//    Mirror these substrings into the MUL-1949 offline backfill SQL.
 	case containsAny(lower,
 		"stream disconnected",
+		"opencode stream ended",
 		"connection closed",
 		"mid-response",
 		"error sending request",
