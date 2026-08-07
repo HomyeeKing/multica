@@ -1164,6 +1164,8 @@ func TestBuildPromptSquadLeaderNoActionProhibition(t *testing.T) {
 		TriggerCommentContent: "Progress update: tests passing.",
 		TriggerAuthorType:     "agent",
 		TriggerAuthorName:     "Worker",
+		IsLeaderTask:          true,
+		LeaderRoleResolved:    true,
 		Agent: &AgentData{
 			Name:         "Leader",
 			Instructions: "You lead the team.\n\n## Squad Operating Protocol\n\nYou are the LEADER.",
@@ -5044,6 +5046,8 @@ func TestBuildPromptSquadLeaderReplyCommandCarvesOutNoAction(t *testing.T) {
 		TriggerCommentContent: "team update posted",
 		TriggerAuthorType:     "member",
 		TriggerAuthorName:     "Bohan",
+		IsLeaderTask:          true,
+		LeaderRoleResolved:    true,
 		Agent: &AgentData{
 			Name:         "Lead",
 			Instructions: "Some instructions\n\n## Squad Operating Protocol\n\nYou are the LEADER...",
@@ -5080,6 +5084,8 @@ func TestBuildPromptSquadLeaderMultiThreadCarvesOutNoAction(t *testing.T) {
 		CoalescedComments: []CoalescedCommentData{
 			{ID: "comment-8", ThreadID: "thread-A", Content: "first update"},
 		},
+		IsLeaderTask:       true,
+		LeaderRoleResolved: true,
 		Agent: &AgentData{
 			Name:         "Lead",
 			Instructions: "Some instructions\n\n## Squad Operating Protocol\n\nYou are the LEADER...",
@@ -5093,10 +5099,17 @@ func TestBuildPromptSquadLeaderMultiThreadCarvesOutNoAction(t *testing.T) {
 	if scope < 0 {
 		t.Fatalf("leader multi-thread prompt missing the whole-block scope sentence\n---\n%s", prompt)
 	}
+	// Obligation strings track the converged fan-out block (MUL-5825). Pin
+	// ledger: "Post the replies in the order listed below" → the order rule
+	// merged into the targets header ("OLDEST thread first"); "For EACH
+	// thread above" → the embedded cookbook collapsed to the
+	// `## Comment Formatting` pointer plus the per-thread file delta
+	// ("DISTINCT body file per thread"). The assertion shape is unchanged:
+	// every obligation must sit AFTER the no_action scope sentence.
 	for _, obligation := range []string{
 		"multiple replies are required and correct",
-		"Post the replies in the order listed below",
-		"For EACH thread above",
+		"OLDEST thread first",
+		"DISTINCT body file per thread",
 	} {
 		idx := strings.Index(prompt, obligation)
 		if idx < 0 {
@@ -5111,6 +5124,7 @@ func TestBuildPromptSquadLeaderMultiThreadCarvesOutNoAction(t *testing.T) {
 	}
 
 	ordinaryTask := leaderTask
+	ordinaryTask.IsLeaderTask = false
 	ordinaryTask.Agent = &AgentData{Name: "Reg", Instructions: "You are a regular agent."}
 	ordinary := BuildPrompt(ordinaryTask, "claude")
 	if !strings.Contains(ordinary, ". Post ONE reply per thread") {
