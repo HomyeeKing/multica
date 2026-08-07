@@ -135,9 +135,11 @@ WHERE assignee_type = 'squad' AND assignee_id = $1;
 
 -- name: ListSquadMemberStatusRows :many
 -- Per-row join used to build the squad-members status view. One row per
--- (squad_member × active_task); members with no active task return a
+-- (squad_member × working_task); members with no working task return a
 -- single row with NULL task_* columns. Human members and agent members
 -- with no agent row also return one row with NULL agent_/runtime_ columns.
+-- waiting_local_directory is intentionally excluded: it is queued workload,
+-- not executing work, and the squad status vocabulary has no queued bucket.
 -- The handler aggregates rows by member_id.
 SELECT
     sm.id              AS squad_member_id,
@@ -161,7 +163,7 @@ LEFT JOIN agent_runtime ar
 LEFT JOIN agent_task_queue atq
        ON sm.member_type = 'agent'
       AND atq.agent_id = sm.member_id
-      AND atq.status IN ('dispatched', 'running', 'waiting_local_directory')
+      AND atq.status IN ('dispatched', 'running')
 LEFT JOIN issue i
        ON i.id = atq.issue_id
 WHERE sm.squad_id = $1

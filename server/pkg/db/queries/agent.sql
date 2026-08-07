@@ -1762,10 +1762,13 @@ WHERE id = $1
 RETURNING *;
 
 -- name: RefreshAgentStatusFromTasks :one
+-- Persisted agent.status has no queued/resource-wait bucket. Keep dispatched
+-- as working because the daemon is actively preparing that task, but do not
+-- let a task parked on a local_directory mutex masquerade as executing work.
 UPDATE agent AS a
 SET status = CASE WHEN EXISTS (
     SELECT 1 FROM agent_task_queue q
-    WHERE q.agent_id = a.id AND q.status IN ('dispatched', 'running', 'waiting_local_directory')
+    WHERE q.agent_id = a.id AND q.status IN ('dispatched', 'running')
 ) THEN 'working' ELSE 'idle' END,
     updated_at = now()
 WHERE a.id = $1

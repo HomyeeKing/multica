@@ -433,11 +433,19 @@ type Daemon struct {
 	// trySelfReload now calls restartTargetBinary every check tick — without
 	// the cache that is up to two uncached `brew --prefix` forks per tick.
 	brewTargetOnce sync.Once
-	brewInstall    bool         // resolved once: was this binary installed via brew?
-	brewTarget     string       // "<prefix>/bin/multica" when brewInstall and the prefix resolved
-	updating       atomic.Bool  // prevents concurrent update attempts
-	activeTasks    atomic.Int64 // number of tasks currently in handleTask; exposed via /health
-	ready          atomic.Bool  // false until preflight completes; gates /health status (starting -> running)
+	brewInstall    bool        // resolved once: was this binary installed via brew?
+	brewTarget     string      // "<prefix>/bin/multica" when brewInstall and the prefix resolved
+	updating       atomic.Bool // prevents concurrent update attempts
+	// activeTasks is the ownership-safe count of tasks currently in handleTask.
+	// It deliberately includes preparation and local-directory waiters because
+	// restart/update barriers must not kill any claimed task.
+	activeTasks atomic.Int64
+	// runningTasks counts live provider execution sessions. resourceWaitTasks
+	// counts tasks blocked on a local_directory path mutex. Both are diagnostic
+	// /health dimensions and must never replace activeTasks in safety barriers.
+	runningTasks      atomic.Int64
+	resourceWaitTasks atomic.Int64
+	ready             atomic.Bool // false until preflight completes; gates /health status (starting -> running)
 	// reloadPendingReason explains why a confirmed multica version change hasn't
 	// restarted the daemon yet (a task was running at the barrier check). Set
 	// and cleared by trySelfReload, read by /health. Diagnostic only.
@@ -4846,7 +4854,13 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 		prepareLeaseOnce sync.Once
 		cancelledByPoll  <-chan struct{}
 		stopPrepareLease func()
+		waitCounted      bool
 	)
+	defer func() {
+		if waitCounted {
+			d.resourceWaitTasks.Add(-1)
+		}
+	}()
 	defer func() {
 		if stopPrepareLease != nil {
 			stopPrepareLease()
@@ -4854,6 +4868,11 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 	}()
 
 	onWait := func(holder string) {
+		// LocalPathLocker invokes onWait synchronously and at most once for an
+		// Acquire call. Count the actual mutex wait even if the best-effort
+		// server status update below fails.
+		d.resourceWaitTasks.Add(1)
+		waitCounted = true
 		reason := fmt.Sprintf("local_directory %s", assignment.AbsPath)
 		if holder != "" {
 			reason = fmt.Sprintf("%s (held by task %s)", reason, shortID(holder))
@@ -6729,6 +6748,8 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 		taskLog.Debug("backend execute returned error", "error", err)
 		return agent.Result{}, 0, err
 	}
+	d.runningTasks.Add(1)
+	defer d.runningTasks.Add(-1)
 	taskLog.Debug("backend started, draining messages")
 
 	// Bound the drain loop only when there is a wall-clock cap. With a positive

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -113,6 +114,7 @@ func TestRefreshAgentStatusFromTasks(t *testing.T) {
 	t.Cleanup(func() { cleanupSweeperFixture(t, issueID, agentID) })
 
 	queries := db.New(testPool)
+	taskService := service.NewTaskService(queries, testPool, nil, events.New())
 
 	if _, err := testPool.Exec(ctx, `UPDATE agent SET status = 'idle' WHERE id = $1`, agentID); err != nil {
 		t.Fatalf("failed to seed idle agent status: %v", err)
@@ -124,6 +126,28 @@ func TestRefreshAgentStatusFromTasks(t *testing.T) {
 	}
 	if agent.Status != "working" {
 		t.Fatalf("expected dispatched task to refresh agent status to working, got %q", agent.Status)
+	}
+
+	if _, err := taskService.MarkTaskWaitingLocalDirectory(ctx, parseUUID(taskID), "test path busy"); err != nil {
+		t.Fatalf("MarkTaskWaitingLocalDirectory failed: %v", err)
+	}
+	agent, err = queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("GetAgent after local-directory wait failed: %v", err)
+	}
+	if agent.Status != "idle" {
+		t.Fatalf("expected waiter-only agent status idle, got %q", agent.Status)
+	}
+
+	if _, err := taskService.StartTask(ctx, parseUUID(taskID)); err != nil {
+		t.Fatalf("StartTask from local-directory wait failed: %v", err)
+	}
+	agent, err = queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("GetAgent after StartTask failed: %v", err)
+	}
+	if agent.Status != "working" {
+		t.Fatalf("expected running task to restore agent status working, got %q", agent.Status)
 	}
 
 	if _, err := testPool.Exec(ctx, `

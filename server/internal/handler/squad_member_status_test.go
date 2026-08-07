@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -48,5 +49,58 @@ func TestDeriveSquadMemberStatus(t *testing.T) {
 				t.Fatalf("deriveSquadMemberStatus = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestListSquadMemberStatusRowsExcludesLocalDirectoryWaiters(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "squad-status-local-directory-waiter", []byte(`{}`))
+	squadID := createCommentTriggerPreviewSquad(t, "Squad Status Local Directory Waiter", agentID)
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO squad_member (squad_id, member_type, member_id)
+		VALUES ($1, 'agent', $2)
+	`, squadID, agentID); err != nil {
+		t.Fatalf("insert squad member: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM squad_member WHERE squad_id = $1 AND member_id = $2`, squadID, agentID)
+	})
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, dispatched_at)
+		VALUES ($1, $2, 'waiting_local_directory', 0, now())
+		RETURNING id
+	`, agentID, handlerTestRuntimeID(t)).Scan(&taskID); err != nil {
+		t.Fatalf("insert local-directory waiter: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	})
+
+	rows, err := testHandler.Queries.ListSquadMemberStatusRows(ctx, parseUUID(squadID))
+	if err != nil {
+		t.Fatalf("ListSquadMemberStatusRows with waiter: %v", err)
+	}
+	if len(rows) != 1 || rows[0].TaskID.Valid {
+		t.Fatalf("waiter-only squad member rows = %+v, want one row with no working task", rows)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_task_queue SET status = 'dispatched' WHERE id = $1
+	`, taskID); err != nil {
+		t.Fatalf("promote waiter to dispatched: %v", err)
+	}
+	rows, err = testHandler.Queries.ListSquadMemberStatusRows(ctx, parseUUID(squadID))
+	if err != nil {
+		t.Fatalf("ListSquadMemberStatusRows with dispatched task: %v", err)
+	}
+	if len(rows) != 1 || !rows[0].TaskID.Valid {
+		t.Fatalf("dispatched squad member rows = %+v, want one working task row", rows)
 	}
 }
