@@ -131,7 +131,6 @@
       "dialog_title": "为 Pi 连接模型",
       "dialog_description": "它会成为这个运行时上所有 Pi Agent 的默认模型；Agent 仍可在高级设置中单独覆盖。",
       "provider_label": "模型提供商",
-      "deepseek_provider": "DeepSeek",
       "custom_provider": "自定义提供商",
       "provider_id_label": "提供商 ID",
       "api_label": "API 格式",

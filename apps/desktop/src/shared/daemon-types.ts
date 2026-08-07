@@ -79,7 +79,7 @@ export const DAEMON_STATE_LABELS: Record<DaemonState, string> = {
   starting: "Starting…",
   stopping: "Stopping…",
   installing_cli: "Setting up…",
-  installing_runtime: "Installing Pi…",
+  installing_runtime: "Installing runtime…",
   cli_not_found: "Setup Failed",
   auth_expired: "Sign-in required",
 };
@@ -134,7 +134,7 @@ export function daemonStateDescription(state: DaemonState, runtimeCount: number)
     case "installing_cli":
       return "Setting up the runtime for the first time. Only happens once.";
     case "installing_runtime":
-      return "Checking for Pi and installing it when needed…";
+      return "Checking managed runtimes and installing them when needed…";
     case "cli_not_found":
       return "Setup failed · couldn't download the runtime. Check your network.";
     case "auth_expired":

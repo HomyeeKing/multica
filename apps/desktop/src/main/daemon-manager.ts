@@ -80,6 +80,7 @@ let operationInProgress = false;
 let cachedCliBinary: string | null | undefined = undefined;
 let cliResolvePromise: Promise<string | null> | null = null;
 const managedRuntimeInstallPromises = new Map<string, Promise<void>>();
+const managedRuntimeSetupFailures = new Set<string>();
 let cachedCliBinaryVersion: string | null | undefined = undefined;
 // Set when a CLI version mismatch was detected but the running daemon is
 // busy executing tasks. The poll loop retries the check on each tick and
@@ -585,6 +586,7 @@ async function ensureManagedRuntime(
             version: result.version,
             source: result.source,
           });
+          managedRuntimeSetupFailures.delete(provider);
           console.log(
             `[daemon] ${provider} runtime ready at ${result.path} (${result.source}${result.installed ? ", installed" : ""})`,
           );
@@ -606,14 +608,33 @@ async function ensureManagedRuntime(
   }
 }
 
-async function ensureDesktopManagedRuntimes(bin: string): Promise<void> {
-  try {
-    await ensureManagedRuntime(bin, "pi");
-  } catch (err) {
-    // Pi setup must not prevent a user-installed Claude/Codex/etc. runtime
-    // from starting. The next app launch or explicit daemon start retries.
-    console.warn("[daemon] Pi runtime setup failed; continuing without Pi:", err);
+function startManagedRuntimeSetup(
+  bin: string,
+  provider: string,
+  options: { force?: boolean } = {},
+): void {
+  if (options.force) {
+    managedRuntimeSetupFailures.delete(provider);
+  } else if (managedRuntimeSetupFailures.has(provider)) {
+    return;
   }
+
+  void ensureManagedRuntime(bin, provider).catch((err) => {
+    managedRuntimeSetupFailures.add(provider);
+    // Pi setup must not prevent a user-installed Claude/Codex/etc. runtime
+    // from starting. Explicit retry clears this process-local failure cache.
+    console.warn(
+      `[daemon] ${provider} runtime setup failed; continuing without it:`,
+      err,
+    );
+  });
+}
+
+function startDesktopManagedRuntimesSetup(
+  bin: string,
+  options: { force?: boolean } = {},
+): void {
+  startManagedRuntimeSetup(bin, "pi", options);
 }
 
 /**
@@ -978,7 +999,7 @@ async function startDaemon(): Promise<{ success: boolean; error?: string }> {
   const bin = await resolveCliBinary();
   if (!bin) return { success: false, error: "multica CLI is not installed" };
 
-  await ensureDesktopManagedRuntimes(bin);
+  startDesktopManagedRuntimesSetup(bin);
 
   const active = await ensureActiveProfile();
   if (!active) {
@@ -1109,19 +1130,21 @@ function startPolling(): void {
  * stopped/running state machine. Called once at startup and again on
  * user-triggered `daemon:retry-install`.
  */
-async function bootstrapCli(): Promise<void> {
+async function bootstrapCli(
+  options: { forceManagedRuntimeSetup?: boolean } = {},
+): Promise<void> {
   const bin = await resolveCliBinary();
   if (!bin) {
     currentState = "cli_not_found";
     sendStatus({ state: "cli_not_found" });
     return;
   }
-  currentState = "installing_runtime";
-  sendStatus({ state: "installing_runtime" });
-  await ensureDesktopManagedRuntimes(bin);
   currentState = "stopped";
   sendStatus({ state: "stopped" });
   startPolling();
+  startDesktopManagedRuntimesSetup(bin, {
+    force: options.forceManagedRuntimeSetup,
+  });
 }
 
 function stopPolling(): void {
@@ -1273,7 +1296,7 @@ export function setupDaemonManager(
     // A retry-install may land a new CLI at a different version; drop the
     // cached version string so the next check re-reads the binary.
     cachedCliBinaryVersion = undefined;
-    await bootstrapCli();
+    await bootstrapCli({ forceManagedRuntimeSetup: true });
   });
   ipcMain.handle("daemon:get-prefs", () => loadPrefs());
   ipcMain.handle(

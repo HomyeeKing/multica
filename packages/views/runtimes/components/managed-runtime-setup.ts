@@ -59,15 +59,18 @@ export function pendingManagedRuntimeFromSetup({
   workspaceId,
   localDaemonId,
   localMachineName,
+  fallbackMachineName,
 }: {
   setup: ManagedRuntimeSetupStatus;
   workspaceId: string;
   localDaemonId?: string | null;
   localMachineName?: string | null;
+  fallbackMachineName?: string | null;
 }): AgentRuntime {
   const provider = setup.provider.trim().toLowerCase();
   const label = providerLabel(provider);
-  const machineName = localMachineName?.trim() || "This machine";
+  const machineName =
+    localMachineName?.trim() || fallbackMachineName?.trim() || "Runtime";
   const metadata: PendingManagedRuntimeMetadata = {
     pending_managed_runtime: true,
     managed_runtime_phase: setup.phase,
@@ -102,12 +105,14 @@ export function runtimesWithManagedRuntimeSetup({
   workspaceId,
   localDaemonId,
   localMachineName,
+  fallbackMachineName,
 }: {
   runtimes: AgentRuntime[];
   setup?: ManagedRuntimeSetupStatus | null;
   workspaceId: string;
   localDaemonId?: string | null;
   localMachineName?: string | null;
+  fallbackMachineName?: string | null;
 }): AgentRuntime[] {
   if (!setup) return runtimes;
   const provider = setup.provider.trim().toLowerCase();
@@ -124,6 +129,7 @@ export function runtimesWithManagedRuntimeSetup({
       workspaceId,
       localDaemonId,
       localMachineName,
+      fallbackMachineName,
     }),
   ];
 }

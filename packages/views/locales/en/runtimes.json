@@ -136,7 +136,6 @@
       "dialog_title": "Connect a model to Pi",
       "dialog_description": "This becomes the default for every Pi agent on this runtime. An agent can still override it in advanced settings.",
       "provider_label": "Model provider",
-      "deepseek_provider": "DeepSeek",
       "custom_provider": "Custom provider",
       "provider_id_label": "Provider ID",
       "api_label": "API format",

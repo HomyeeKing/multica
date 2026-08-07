@@ -164,8 +164,9 @@ export function RuntimeDetailPage({
       workspaceId: wsId,
       localDaemonId: baseMachine.daemonId,
       localMachineName: baseMachine.title,
+      fallbackMachineName: t(($) => $.machine.this_machine),
     });
-  }, [baseMachine, managedRuntimeSetup, profileRows, wsId]);
+  }, [baseMachine, managedRuntimeSetup, profileRows, t, wsId]);
   const machine = baseMachine;
   const handleDaemonEvent = useCallback(() => {
     qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });

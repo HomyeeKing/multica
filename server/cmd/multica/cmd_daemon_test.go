@@ -907,7 +907,7 @@ func TestRunDaemonInstallRuntimeRefreshesExistingManagedPi(t *testing.T) {
 	}
 }
 
-func TestRunDaemonInstallRuntimeRejectsOldUserPiWithoutShadowing(t *testing.T) {
+func TestRunDaemonInstallRuntimeFallsBackToManagedWhenUserPiIsOld(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture is POSIX-only")
 	}
@@ -924,16 +924,24 @@ func TestRunDaemonInstallRuntimeRejectsOldUserPiWithoutShadowing(t *testing.T) {
 	probeInstallRuntimeCandidates = func() map[string]daemon.AgentEntry {
 		return map[string]daemon.AgentEntry{"pi": {Path: bin, Command: "pi"}}
 	}
-	fake := &fakeManagedRuntimeInstaller{}
+	fake := &fakeManagedRuntimeInstaller{result: managedruntime.InstallResult{
+		Provider: "pi", Version: "0.83.0", Path: "/managed/pi", Installed: true,
+	}}
 	newManagedRuntimeInstaller = func() (managedRuntimeInstaller, error) { return fake, nil }
 
-	cmd, _ := newInstallRuntimeTestCommand(t)
-	err := runDaemonInstallRuntime(cmd, []string{"pi"})
-	if err == nil || !strings.Contains(err.Error(), "below minimum") {
-		t.Fatalf("error = %v, want minimum-version rejection", err)
+	cmd, out := newInstallRuntimeTestCommand(t)
+	if err := runDaemonInstallRuntime(cmd, []string{"pi"}); err != nil {
+		t.Fatalf("runDaemonInstallRuntime: %v", err)
 	}
-	if fake.calls != 0 {
-		t.Fatalf("installer must not shadow an old user Pi; calls = %d", fake.calls)
+	var result daemonRuntimeInstallOutput
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("decode output: %v", err)
+	}
+	if result.Source != "managed" || !result.Installed || result.Path != "/managed/pi" {
+		t.Fatalf("result = %+v", result)
+	}
+	if fake.calls != 1 {
+		t.Fatalf("installer calls = %d, want managed fallback", fake.calls)
 	}
 }
 

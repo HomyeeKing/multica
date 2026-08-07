@@ -195,15 +195,21 @@ func runDaemonInstallRuntime(cmd *cobra.Command, args []string) error {
 		// release can advance the compiled latest-supported version atomically.
 		if !managedruntime.IsManagedExecutable(provider, entry.Path) {
 			version, err := detectInstalledRuntimeVersion(ctx, provider, entry.Path, descriptor.Verify.Args)
-			if err != nil {
-				return err
+			if err == nil {
+				return writeDaemonRuntimeInstallOutput(cmd, daemonRuntimeInstallOutput{
+					Provider: provider,
+					Version:  version,
+					Path:     entry.Path,
+					Source:   "user",
+				})
 			}
-			return writeDaemonRuntimeInstallOutput(cmd, daemonRuntimeInstallOutput{
-				Provider: provider,
-				Version:  version,
-				Path:     entry.Path,
-				Source:   "user",
-			})
+			fmt.Fprintf(
+				cmd.ErrOrStderr(),
+				"existing %s runtime at %s is not usable (%v); installing Multica-managed runtime instead\n",
+				provider,
+				entry.Path,
+				err,
+			)
 		}
 	}
 

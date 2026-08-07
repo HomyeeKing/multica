@@ -131,7 +131,6 @@
       "dialog_title": "Pi にモデルを接続",
       "dialog_description": "このランタイム上のすべての Pi エージェントのデフォルトになります。エージェントごとに詳細設定で上書きできます。",
       "provider_label": "モデルプロバイダー",
-      "deepseek_provider": "DeepSeek",
       "custom_provider": "カスタムプロバイダー",
       "provider_id_label": "プロバイダー ID",
       "api_label": "API 形式",

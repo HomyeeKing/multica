@@ -96,4 +96,16 @@ describe("managed runtime setup rows", () => {
     expect(result).toHaveLength(2);
     expect(managedRuntimeSetupPhase(result[1]!)).toBe("failed");
   });
+
+  it("uses the caller-provided machine fallback for pending rows", () => {
+    const result = runtimesWithManagedRuntimeSetup({
+      runtimes: [],
+      setup: setup(),
+      workspaceId: "ws-1",
+      fallbackMachineName: "This device",
+    });
+
+    expect(result[0]?.name).toBe("Pi (This device)");
+    expect(result[0]?.device_info).toBe("This device");
+  });
 });
