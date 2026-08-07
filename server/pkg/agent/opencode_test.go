@@ -1141,6 +1141,9 @@ if [ -n "$OPENCODE_ARGS_FILE" ]; then
     printf '%s\n' "$arg" >> "$OPENCODE_ARGS_FILE"
   done
 fi
+if [ -n "$OPENCODE_STDIN_FILE" ]; then
+  cat > "$OPENCODE_STDIN_FILE"
+fi
 if [ -n "$OPENCODE_PWD_FILE" ]; then
   printf '%s\n' "$PWD" > "$OPENCODE_PWD_FILE"
 fi
@@ -1262,6 +1265,7 @@ func TestOpencodeBackendNeverEmitsPromptFlag(t *testing.T) {
 
 	tempDir := t.TempDir()
 	argsFile := filepath.Join(tempDir, "argv.txt")
+	stdinFile := filepath.Join(tempDir, "stdin.txt")
 	fakePath := filepath.Join(tempDir, "opencode")
 	writeTestExecutable(t, fakePath, []byte(fakeOpencodeScript()))
 
@@ -1270,7 +1274,10 @@ func TestOpencodeBackendNeverEmitsPromptFlag(t *testing.T) {
 	backend, err := New("opencode", Config{
 		ExecutablePath: fakePath,
 		Logger:         slog.Default(),
-		Env:            map[string]string{"OPENCODE_ARGS_FILE": argsFile},
+		Env: map[string]string{
+			"OPENCODE_ARGS_FILE":  argsFile,
+			"OPENCODE_STDIN_FILE": stdinFile,
+		},
 	})
 	if err != nil {
 		t.Fatalf("new opencode backend: %v", err)
@@ -1306,9 +1313,16 @@ func TestOpencodeBackendNeverEmitsPromptFlag(t *testing.T) {
 	if containsString(args, brief) {
 		t.Errorf("SystemPrompt leaked into argv: %v", args)
 	}
-	// The user prompt is still the final positional arg.
-	if len(args) == 0 || args[len(args)-1] != "do the thing" {
-		t.Errorf("expected prompt as final positional arg, got %v", args)
+	// The user prompt travels on stdin, not argv (#6538).
+	if containsString(args, "do the thing") {
+		t.Errorf("user prompt leaked into argv: %v", args)
+	}
+	stdinRaw, err := os.ReadFile(stdinFile)
+	if err != nil {
+		t.Fatalf("read stdin file: %v", err)
+	}
+	if string(stdinRaw) != "do the thing" {
+		t.Errorf("prompt did not arrive on stdin: got %q", string(stdinRaw))
 	}
 }
 
