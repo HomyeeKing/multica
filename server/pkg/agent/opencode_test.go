@@ -1141,8 +1141,15 @@ if [ -n "$OPENCODE_ARGS_FILE" ]; then
     printf '%s\n' "$arg" >> "$OPENCODE_ARGS_FILE"
   done
 fi
+
+# Real OpenCode reads stdin to EOF (await Bun.stdin.text()) before it does any
+# work, so the fake must drain it too. A fake that exits without reading closes
+# the read end under the daemon's concurrent prompt write, which surfaces as a
+# spurious EPIPE whose timing depends on machine load.
 if [ -n "$OPENCODE_STDIN_FILE" ]; then
   cat > "$OPENCODE_STDIN_FILE"
+else
+  cat > /dev/null
 fi
 if [ -n "$OPENCODE_PWD_FILE" ]; then
   printf '%s\n' "$PWD" > "$OPENCODE_PWD_FILE"
@@ -1560,6 +1567,7 @@ func TestOpencodeBackendBlocksDirOverride(t *testing.T) {
 // rescue the run; the unclosed step is what fails it.
 func fakeOpencodeMidToolScript() string {
 	return `#!/bin/sh
+cat > /dev/null
 printf '{"type":"step_start","timestamp":1,"sessionID":"ses_fake","part":{"type":"step-start"}}\n'
 printf '{"type":"tool_use","timestamp":2,"sessionID":"ses_fake","part":{"type":"tool","tool":"read","callID":"functions.read:1","state":{"status":"error","input":{"filePath":"/nope.md"},"error":"File not found"}}}\n'
 exit 0
@@ -1614,6 +1622,7 @@ func TestOpencodeBackendFailsOnStreamEndingMidTool(t *testing.T) {
 // step_finish and no error event.
 func fakeOpencodeStepThenExit1Script() string {
 	return `#!/bin/sh
+cat > /dev/null
 printf '{"type":"step_start","timestamp":1,"sessionID":"ses_fake","part":{"type":"step-start"}}\n'
 exit 1
 `

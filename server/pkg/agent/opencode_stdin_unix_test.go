@@ -171,6 +171,47 @@ func TestOpencodeExecuteLargePromptDoesNotDeadlock(t *testing.T) {
 	}
 }
 
+// TestOpencodeExecuteIgnoresBenignPromptWriteEPIPE pins that a run which
+// produced a complete, successful stream is not failed by a prompt write that
+// broke on the way out. A child exiting without draining stdin closes the read
+// end under the concurrent write, so the parent sees EPIPE — and whether that
+// lands before or after the child exits is pure timing. Reporting it as a
+// failure makes the result load-dependent and throws away a good run.
+func TestOpencodeExecuteIgnoresBenignPromptWriteEPIPE(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// A complete, successful stream from a child that never reads stdin.
+	script := "#!/bin/sh\n" + opencodeStreamTail
+	fakePath := filepath.Join(dir, "opencode")
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	// Far larger than any pipe buffer, so the write cannot slip through before
+	// the child exits: EPIPE here is deterministic, not incidental.
+	prompt := strings.Repeat("benign epipe payload 0123456789\n", 40_000)
+
+	backend, err := New("opencode", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("New(opencode): %v", err)
+	}
+	session, err := backend.Execute(t.Context(), prompt, ExecOptions{Timeout: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+	result := <-session.Result
+
+	if result.Status != "completed" {
+		t.Fatalf("status = %q, want completed; error=%q", result.Status, result.Error)
+	}
+	if result.Output != "ok" {
+		t.Errorf("Output = %q, want %q", result.Output, "ok")
+	}
+}
+
 // TestOpencodeExecuteCancelReleasesBlockedPromptWriter covers the cancellation
 // half of the stdin contract: a child that never reads stdin leaves the prompt
 // writer blocked on a full pipe. Cancelling must close stdin so that goroutine

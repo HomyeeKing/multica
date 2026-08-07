@@ -273,9 +273,19 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 			// the process exit detail so a mid-step crash still surfaces the
 			// signal / exit code that killed it.
 			scanResult.errMsg = fmt.Sprintf("%s; opencode exited with error: %v", scanResult.errMsg, exitErr)
-		} else if writeErr != nil && scanResult.status == "completed" {
-			scanResult.status = "failed"
-			scanResult.errMsg = fmt.Sprintf("opencode prompt write failed: %v", writeErr)
+		} else if writeErr != nil && scanResult.status != "completed" {
+			// A prompt write can only explain a run that did NOT complete.
+			// OpenCode reads stdin to EOF before it does any work, so a run that
+			// produced a complete stream necessarily received the whole prompt —
+			// an EPIPE recorded after that just means it closed the pipe on its
+			// way out, and failing an otherwise good run on it would discard a
+			// successful result. Append rather than overwrite so the stream's own
+			// diagnosis survives.
+			if scanResult.errMsg == "" {
+				scanResult.errMsg = fmt.Sprintf("opencode prompt write failed: %v", writeErr)
+			} else {
+				scanResult.errMsg = fmt.Sprintf("%s; opencode prompt write failed: %v", scanResult.errMsg, writeErr)
+			}
 		}
 
 		b.cfg.Logger.Info("opencode finished", "pid", cmd.Process.Pid, "status", scanResult.status, "duration", duration.Round(time.Millisecond).String())
