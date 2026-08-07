@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -397,6 +398,69 @@ func TestBuildACPMcpServersReturnsErrorOnMalformedJSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse mcp_config json") {
 		t.Errorf("error message: got %q, want it to mention parsing", err.Error())
+	}
+}
+
+// ── non-canonical mcp_config top-level keys ──
+
+// buildACPMcpServersLogs runs the translation with a capturing logger and
+// returns everything written, so the tests below can assert on the operator
+// signal rather than only on the (still empty) server list.
+func buildACPMcpServersLogs(t *testing.T, raw string) (string, []any) {
+	t.Helper()
+	var logs bytes.Buffer
+	got, err := buildACPMcpServers(json.RawMessage(raw), slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatalf("buildACPMcpServers(%s) error: %v", raw, err)
+	}
+	return logs.String(), got
+}
+
+// A runtime-native config pasted into mcp_config used to produce an empty
+// server list and no log line at all — the agent just ran with no MCP tools
+// (#6540). It still produces no servers, but it must no longer be silent.
+func TestBuildACPMcpServersWarnsOnRuntimeNativeTopLevelKey(t *testing.T) {
+	t.Parallel()
+	// The exact shape from the #6540 reporter's jcode mcp.json.
+	raw := `{"servers":{"codebase-memory":{"command":"/usr/local/bin/codebase-memory-mcp","args":[],"shared":true}}}`
+	logs, got := buildACPMcpServersLogs(t, raw)
+	if len(got) != 0 {
+		t.Fatalf("servers: got %d, want 0 (entries are not adopted, only reported)", len(got))
+	}
+	if !strings.Contains(logs, "mcpServers") {
+		t.Errorf("warning should name the canonical key; got %q", logs)
+	}
+	if !strings.Contains(logs, `"found_key":"servers"`) {
+		t.Errorf("warning should name the key actually found; got %q", logs)
+	}
+}
+
+func TestBuildACPMcpServersWarnsOnOtherRuntimeNativeKeys(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"mcp", "mcp_servers"} {
+		raw := fmt.Sprintf(`{%q:{"fetch":{"command":"uvx"}}}`, key)
+		logs, got := buildACPMcpServersLogs(t, raw)
+		if len(got) != 0 {
+			t.Errorf("%s: servers got %d, want 0", key, len(got))
+		}
+		if !strings.Contains(logs, fmt.Sprintf(`"found_key":%q`, key)) {
+			t.Errorf("%s: warning should name the key found; got %q", key, logs)
+		}
+	}
+}
+
+// A deliberately empty managed config is a valid state (it means "this agent
+// has no MCP servers"), so it must not be reported as a misconfiguration.
+func TestBuildACPMcpServersDoesNotWarnOnCanonicalOrEmptyConfig(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{`{"mcpServers":{}}`, `{}`, `null`, `{"servers":{}}`} {
+		logs, got := buildACPMcpServersLogs(t, raw)
+		if len(got) != 0 {
+			t.Errorf("%s: servers got %d, want 0", raw, len(got))
+		}
+		if strings.Contains(logs, "found_key") {
+			t.Errorf("%s: should not warn, got %q", raw, logs)
+		}
 	}
 }
 
@@ -2734,52 +2798,77 @@ func TestHermesBackendDoesNotPromoteOnTransientRetry(t *testing.T) {
 func TestExtractACPMcpCapabilities(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name     string
-		raw      string
-		wantHTTP bool
-		wantSSE  bool
+		name          string
+		raw           string
+		wantAdvertise bool
+		wantHTTP      bool
+		wantSSE       bool
 	}{
 		{
-			name:     "both true",
-			raw:      `{"protocolVersion":1,"agentCapabilities":{"mcpCapabilities":{"http":true,"sse":true}}}`,
-			wantHTTP: true,
-			wantSSE:  true,
+			name:          "both true",
+			raw:           `{"protocolVersion":1,"agentCapabilities":{"mcpCapabilities":{"http":true,"sse":true}}}`,
+			wantAdvertise: true,
+			wantHTTP:      true,
+			wantSSE:       true,
 		},
 		{
-			name:     "http only",
-			raw:      `{"agentCapabilities":{"mcpCapabilities":{"http":true}}}`,
-			wantHTTP: true,
-			wantSSE:  false,
+			name:          "http only",
+			raw:           `{"agentCapabilities":{"mcpCapabilities":{"http":true}}}`,
+			wantAdvertise: true,
+			wantHTTP:      true,
+			wantSSE:       false,
 		},
 		{
-			name:     "sse only",
-			raw:      `{"agentCapabilities":{"mcpCapabilities":{"sse":true}}}`,
-			wantHTTP: false,
-			wantSSE:  true,
+			name:          "sse only",
+			raw:           `{"agentCapabilities":{"mcpCapabilities":{"sse":true}}}`,
+			wantAdvertise: true,
+			wantHTTP:      false,
+			wantSSE:       true,
 		},
 		{
-			name:     "block missing",
-			raw:      `{"agentCapabilities":{}}`,
-			wantHTTP: false,
-			wantSSE:  false,
+			// An explicit block that opts out of both is a real
+			// declaration and must stay distinguishable from silence.
+			name:          "block present but both false",
+			raw:           `{"agentCapabilities":{"mcpCapabilities":{"http":false,"sse":false}}}`,
+			wantAdvertise: true,
+			wantHTTP:      false,
+			wantSSE:       false,
 		},
 		{
-			name:     "agentCapabilities missing",
-			raw:      `{"protocolVersion":1}`,
-			wantHTTP: false,
-			wantSSE:  false,
+			name:          "empty block still counts as advertised",
+			raw:           `{"agentCapabilities":{"mcpCapabilities":{}}}`,
+			wantAdvertise: true,
+			wantHTTP:      false,
+			wantSSE:       false,
 		},
 		{
-			name:     "malformed json",
-			raw:      `not json`,
-			wantHTTP: false,
-			wantSSE:  false,
+			// hermes 0.18.2's real initialize response: no block at all.
+			name:          "block missing",
+			raw:           `{"agentCapabilities":{}}`,
+			wantAdvertise: false,
+			wantHTTP:      false,
+			wantSSE:       false,
+		},
+		{
+			name:          "agentCapabilities missing",
+			raw:           `{"protocolVersion":1}`,
+			wantAdvertise: false,
+			wantHTTP:      false,
+			wantSSE:       false,
+		},
+		{
+			name:          "malformed json",
+			raw:           `not json`,
+			wantAdvertise: false,
+			wantHTTP:      false,
+			wantSSE:       false,
 		},
 	}
 	for _, tc := range tests {
 		got := extractACPMcpCapabilities(json.RawMessage(tc.raw))
-		if got.HTTP != tc.wantHTTP || got.SSE != tc.wantSSE {
-			t.Errorf("%s: got {HTTP:%v SSE:%v}, want {HTTP:%v SSE:%v}", tc.name, got.HTTP, got.SSE, tc.wantHTTP, tc.wantSSE)
+		if got.Advertised != tc.wantAdvertise || got.HTTP != tc.wantHTTP || got.SSE != tc.wantSSE {
+			t.Errorf("%s: got {Advertised:%v HTTP:%v SSE:%v}, want {Advertised:%v HTTP:%v SSE:%v}",
+				tc.name, got.Advertised, got.HTTP, got.SSE, tc.wantAdvertise, tc.wantHTTP, tc.wantSSE)
 		}
 	}
 }
@@ -2793,9 +2882,45 @@ func TestFilterACPMcpServersByCapabilityStdioAlwaysPassesThrough(t *testing.T) {
 	servers := []any{
 		map[string]any{"name": "fetch", "command": "uvx"},
 	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{}, "hermes", slog.Default())
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Advertised: true}, "hermes", slog.Default())
 	if len(got) != 1 {
 		t.Fatalf("len: got %d, want 1", len(got))
+	}
+}
+
+// TestFilterACPMcpServersByCapabilityUnadvertisedForwardsRemoteEntries pins
+// the #6540 fix: a runtime that sends no `mcpCapabilities` block at all has
+// declared nothing, so its user's http/sse servers must still go out rather
+// than being dropped into a daemon log the user never sees. hermes 0.18.2
+// is exactly this case and accepts both transports on session/new.
+func TestFilterACPMcpServersByCapabilityUnadvertisedForwardsRemoteEntries(t *testing.T) {
+	t.Parallel()
+	servers := []any{
+		map[string]any{"name": "stdio", "command": "uvx"},
+		map[string]any{"type": "http", "name": "http", "url": "https://x/mcp"},
+		map[string]any{"type": "sse", "name": "sse", "url": "https://x/sse"},
+	}
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{}, "hermes", slog.Default())
+	if len(got) != 3 {
+		t.Fatalf("len: got %d, want 3 (nothing advertised means nothing declined)", len(got))
+	}
+}
+
+// An explicit all-false block is a real opt-out and must still be honoured,
+// so the fix above cannot be implemented by ignoring capabilities wholesale.
+func TestFilterACPMcpServersByCapabilityExplicitOptOutStillDrops(t *testing.T) {
+	t.Parallel()
+	servers := []any{
+		map[string]any{"name": "stdio", "command": "uvx"},
+		map[string]any{"type": "http", "name": "http", "url": "https://x/mcp"},
+		map[string]any{"type": "sse", "name": "sse", "url": "https://x/sse"},
+	}
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Advertised: true}, "hermes", slog.Default())
+	if len(got) != 1 {
+		t.Fatalf("len: got %d, want 1 (only stdio survives an explicit opt-out)", len(got))
+	}
+	if got[0].(map[string]any)["name"] != "stdio" {
+		t.Errorf("kept wrong entry: %v", got[0])
 	}
 }
 
@@ -2806,7 +2931,7 @@ func TestFilterACPMcpServersByCapabilityDropsUnsupportedHttp(t *testing.T) {
 		map[string]any{"type": "http", "name": "http-drop", "url": "https://x/mcp"},
 		map[string]any{"type": "sse", "name": "sse-keep", "url": "https://x/sse"},
 	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{SSE: true}, "hermes", slog.Default())
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Advertised: true, SSE: true}, "hermes", slog.Default())
 	if len(got) != 2 {
 		t.Fatalf("len: got %d, want 2 (http should be dropped, sse kept)", len(got))
 	}
@@ -2825,7 +2950,7 @@ func TestFilterACPMcpServersByCapabilityDropsUnsupportedSse(t *testing.T) {
 		map[string]any{"type": "sse", "name": "sse-drop", "url": "https://x/sse"},
 		map[string]any{"type": "http", "name": "http-keep", "url": "https://x/mcp"},
 	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{HTTP: true}, "kimi", slog.Default())
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Advertised: true, HTTP: true}, "kimi", slog.Default())
 	if len(got) != 1 {
 		t.Fatalf("len: got %d, want 1", len(got))
 	}
@@ -2841,7 +2966,7 @@ func TestFilterACPMcpServersByCapabilityKeepsAllWhenBothSupported(t *testing.T) 
 		map[string]any{"type": "http", "name": "http", "url": "https://x/mcp"},
 		map[string]any{"type": "sse", "name": "sse", "url": "https://x/sse"},
 	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{HTTP: true, SSE: true}, "kiro", slog.Default())
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Advertised: true, HTTP: true, SSE: true}, "kiro", slog.Default())
 	if len(got) != 3 {
 		t.Fatalf("len: got %d, want 3", len(got))
 	}
@@ -3192,16 +3317,19 @@ func TestHermesResumeIncludesMcpServers(t *testing.T) {
 	}
 }
 
-// TestHermesDropsRemoteMcpWhenCapabilityNotAdvertised pins the contract
-// that when the runtime's initialize response advertises no http/sse
-// support, those entries are filtered out of session/new — sending them
-// anyway is a protocol violation that reliably tanks the request.
-func TestHermesDropsRemoteMcpWhenCapabilityNotAdvertised(t *testing.T) {
+// TestHermesForwardsRemoteMcpWhenCapabilityNotAdvertised pins the #6540
+// fix: a runtime whose initialize response carries no mcpCapabilities block
+// has declared nothing about remote transports, so there is no declaration
+// to violate and the user's http/sse servers must still reach session/new.
+// Dropping them here is what made a configured MCP server vanish with no
+// user-visible signal. Real hermes 0.18.2 responds exactly like this fake
+// and accepts both transports.
+func TestHermesForwardsRemoteMcpWhenCapabilityNotAdvertised(t *testing.T) {
 	t.Parallel()
 
 	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
 	fakePath := filepath.Join(t.TempDir(), "hermes")
-	// agentCapabilities = {} → neither http nor sse advertised.
+	// agentCapabilities = {} → no mcpCapabilities block at all.
 	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_new", `{}`)))
 
 	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -3238,8 +3366,58 @@ func TestHermesDropsRemoteMcpWhenCapabilityNotAdvertised(t *testing.T) {
 	if !ok {
 		t.Fatalf("session/new.mcpServers: got %T, want []any", params["mcpServers"])
 	}
+	if len(servers) != 3 {
+		t.Fatalf("session/new.mcpServers: got %d entries, want 3 (nothing declared means nothing declined)", len(servers))
+	}
+}
+
+// TestHermesDropsRemoteMcpWhenCapabilityExplicitlyDeclined pins the other
+// half of the contract: an mcpCapabilities block that is present and says
+// false IS a declaration, and sending those entries anyway is the protocol
+// violation the filter exists to prevent.
+func TestHermesDropsRemoteMcpWhenCapabilityExplicitlyDeclined(t *testing.T) {
+	t.Parallel()
+
+	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
+	fakePath := filepath.Join(t.TempDir(), "hermes")
+	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_new", `{"mcpCapabilities":{"http":false,"sse":false}}`)))
+
+	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new hermes backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
+		Timeout: 30 * time.Second,
+		McpConfig: json.RawMessage(`{"mcpServers":{
+			"local":{"command":"uvx"},
+			"remote-http":{"type":"http","url":"https://x/mcp"},
+			"remote-sse":{"type":"sse","url":"https://x/sse"}
+		}}`),
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+	select {
+	case <-session.Result:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
+	}
+
+	frame := findRecordedFrame(t, recordPath, "session/new")
+	params := frame["params"].(map[string]any)
+	servers, ok := params["mcpServers"].([]any)
+	if !ok {
+		t.Fatalf("session/new.mcpServers: got %T, want []any", params["mcpServers"])
+	}
 	if len(servers) != 1 {
-		t.Fatalf("session/new.mcpServers: got %d entries, want 1 (only stdio should remain)", len(servers))
+		t.Fatalf("session/new.mcpServers: got %d entries, want 1 (only stdio survives an explicit opt-out)", len(servers))
 	}
 	if servers[0].(map[string]any)["name"] != "local" {
 		t.Errorf("kept the wrong entry: %v", servers[0])

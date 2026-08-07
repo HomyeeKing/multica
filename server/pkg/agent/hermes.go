@@ -1891,6 +1891,7 @@ func buildACPMcpServers(raw json.RawMessage, logger *slog.Logger) ([]any, error)
 		return nil, fmt.Errorf("parse mcp_config json: %w", err)
 	}
 	if len(parsed.McpServers) == 0 {
+		warnNonCanonicalMcpConfigKey(trimmed, logger)
 		return []any{}, nil
 	}
 
@@ -1912,6 +1913,50 @@ func buildACPMcpServers(raw json.RawMessage, logger *slog.Logger) ([]any, error)
 		out = append(out, entry)
 	}
 	return out, nil
+}
+
+// acpAltMcpConfigKeys are top-level keys that runtime-native MCP config
+// files use instead of Multica's canonical `mcpServers`: jcode and Kiro
+// nest under `servers`, OpenCode under `mcp`, Codex's TOML under
+// `mcp_servers`.
+var acpAltMcpConfigKeys = []string{"servers", "mcp", "mcp_servers"}
+
+// warnNonCanonicalMcpConfigKey logs when an mcp_config carries no
+// `mcpServers` key but does hold servers under a runtime-native one.
+//
+// mcp_config is stored as opaque JSON, so pasting a runtime's own config
+// file in is both easy and — until this warning — completely silent: the
+// config saves, the daemon forwards an empty array, and the agent runs
+// with no MCP tools and nothing logged anywhere (#6540). We only warn
+// rather than adopt the entries, because the surrounding entry shapes are
+// not guaranteed to match ACP's and guessing risks forwarding a
+// half-understood config.
+func warnNonCanonicalMcpConfigKey(raw json.RawMessage, logger *slog.Logger) {
+	if logger == nil {
+		return
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return
+	}
+	if _, ok := top["mcpServers"]; ok {
+		return
+	}
+	for _, key := range acpAltMcpConfigKeys {
+		nested, ok := top[key]
+		if !ok {
+			continue
+		}
+		var entries map[string]json.RawMessage
+		if err := json.Unmarshal(nested, &entries); err != nil || len(entries) == 0 {
+			continue
+		}
+		logger.Warn("mcp_config has no \"mcpServers\" key, so no MCP servers will be sent to the runtime",
+			"found_key", key,
+			"server_count", len(entries),
+			"hint", `mcp_config must be shaped {"mcpServers": {"<name>": {...}}}; a runtime's own config file is not accepted verbatim`)
+		return
+	}
 }
 
 // convertACPMcpServer converts a single Claude-style entry into the ACP
@@ -1998,15 +2043,22 @@ func sortedStringMapKeys(m map[string]string) []string {
 // supported (it's the baseline transport and the spec does not gate it),
 // so it's not represented here.
 type acpMcpTransportCapabilities struct {
-	HTTP bool
-	SSE  bool
+	// Advertised reports whether the runtime sent an
+	// `agentCapabilities.mcpCapabilities` object at all. A runtime that
+	// omits the block told us nothing about remote transports, which is
+	// not the same as telling us it supports none — see
+	// filterACPMcpServersByCapability for why that distinction matters.
+	Advertised bool
+	HTTP       bool
+	SSE        bool
 }
 
 // extractACPMcpCapabilities reads `agentCapabilities.mcpCapabilities.http`
-// and `.sse` out of an ACP `initialize` response. Missing or false fields
-// stay false, matching the spec default: the runtime must opt-in to
-// remote MCP transports. Unparseable responses degrade to "neither
-// supported" so we fail closed on remote entries.
+// and `.sse` out of an ACP `initialize` response. An explicitly present
+// block is reported as advertised, so a field the runtime left out of it
+// (or set to false) is an opt-out we honour. A missing block — or an
+// unparseable response — reports Advertised=false, meaning "unknown"
+// rather than "unsupported".
 //
 // See https://agentclientprotocol.com/protocol/initialization — clients
 // MUST NOT send `mcpServers` entries with a type the agent did not
@@ -2014,7 +2066,7 @@ type acpMcpTransportCapabilities struct {
 func extractACPMcpCapabilities(result json.RawMessage) acpMcpTransportCapabilities {
 	var r struct {
 		AgentCapabilities struct {
-			McpCapabilities struct {
+			McpCapabilities *struct {
 				HTTP bool `json:"http"`
 				SSE  bool `json:"sse"`
 			} `json:"mcpCapabilities"`
@@ -2023,22 +2075,34 @@ func extractACPMcpCapabilities(result json.RawMessage) acpMcpTransportCapabiliti
 	if err := json.Unmarshal(result, &r); err != nil {
 		return acpMcpTransportCapabilities{}
 	}
+	caps := r.AgentCapabilities.McpCapabilities
+	if caps == nil {
+		return acpMcpTransportCapabilities{}
+	}
 	return acpMcpTransportCapabilities{
-		HTTP: r.AgentCapabilities.McpCapabilities.HTTP,
-		SSE:  r.AgentCapabilities.McpCapabilities.SSE,
+		Advertised: true,
+		HTTP:       caps.HTTP,
+		SSE:        caps.SSE,
 	}
 }
 
 // filterACPMcpServersByCapability drops remote MCP entries whose transport
-// the runtime didn't advertise in its initialize response. Stdio entries
+// the runtime explicitly declined in its initialize response. Stdio entries
 // (no `type` field) always pass through.
 //
-// Sending an http/sse entry to a runtime that doesn't support it is a
-// protocol violation per the ACP spec, and Hermes / Kimi observed in
-// practice reject the whole session/new request with a JSON-RPC error.
-// Dropping the offending entries with a warning lets the rest of the
-// session start and surfaces the problem in the daemon log instead of
-// tanking every task on that agent.
+// Sending an http/sse entry to a runtime that declared it doesn't support
+// the transport is a protocol violation per the ACP spec and can reject the
+// whole session/new request with a JSON-RPC error. Dropping those entries
+// lets the rest of the session start instead of tanking every task on that
+// agent.
+//
+// A runtime that omits `mcpCapabilities` entirely is a different case, and
+// treating it as "supports neither" is what made this filter discard working
+// servers: hermes 0.18.2 sends no such block yet accepts both http and sse
+// entries on session/new. Because the drop was daemon-log-only, a configured
+// MCP server simply never showed up, with no signal the user could see
+// (#6540). With no declaration to honour there is no spec violation to
+// avoid, so the entries go out and the runtime decides for itself.
 func filterACPMcpServersByCapability(
 	servers []any,
 	caps acpMcpTransportCapabilities,
@@ -2046,6 +2110,13 @@ func filterACPMcpServersByCapability(
 	logger *slog.Logger,
 ) []any {
 	if len(servers) == 0 {
+		return servers
+	}
+	if !caps.Advertised {
+		if logger != nil && acpHasRemoteMcpEntry(servers) {
+			logger.Info("runtime advertised no mcpCapabilities; forwarding remote MCP servers and letting the runtime decide",
+				"backend", backend)
+		}
 		return servers
 	}
 	filtered := make([]any, 0, len(servers))
@@ -2077,6 +2148,21 @@ func filterACPMcpServersByCapability(
 		filtered = append(filtered, entry)
 	}
 	return filtered
+}
+
+// acpHasRemoteMcpEntry reports whether any entry uses a remote transport,
+// i.e. whether the capability question is relevant at all for this config.
+func acpHasRemoteMcpEntry(servers []any) bool {
+	for _, raw := range servers {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if transport, _ := entry["type"].(string); transport == "http" || transport == "sse" {
+			return true
+		}
+	}
+	return false
 }
 
 // hermesToolNameFromTitle extracts a tool name from the ACP tool call title.

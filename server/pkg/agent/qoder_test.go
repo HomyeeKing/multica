@@ -759,7 +759,11 @@ func TestQoderForwardsMcpAuthHeaderToSessionNew(t *testing.T) {
 	}
 }
 
-func TestQoderFiltersRemoteMcpWhenInitializeDoesNotAdvertiseCapability(t *testing.T) {
+// The shared ACP capability gate treats a missing mcpCapabilities block as
+// "unknown", not "unsupported" (#6540), so qoder must forward the remote
+// entry here rather than silently dropping it. An explicitly declined
+// transport is still filtered — see the hermes tests for that half.
+func TestQoderForwardsRemoteMcpWhenInitializeOmitsCapabilities(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
@@ -810,8 +814,8 @@ func TestQoderFiltersRemoteMcpWhenInitializeDoesNotAdvertiseCapability(t *testin
 	if !strings.Contains(sessionNew, `"name":"local-stdio"`) || !strings.Contains(sessionNew, `"command":"uvx"`) {
 		t.Fatalf("stdio MCP server should remain in session/new payload:\n%s", sessionNew)
 	}
-	if strings.Contains(sessionNew, `"name":"remote-sse"`) || strings.Contains(sessionNew, "https://example.com/sse") || strings.Contains(sessionNew, "Bearer tok") {
-		t.Fatalf("remote SSE MCP server should be filtered when initialize omits mcpCapabilities.sse:\n%s", sessionNew)
+	if !strings.Contains(sessionNew, `"name":"remote-sse"`) || !strings.Contains(sessionNew, "https://example.com/sse") {
+		t.Fatalf("remote SSE MCP server should be forwarded when initialize declares no mcpCapabilities at all:\n%s", sessionNew)
 	}
 }
 
