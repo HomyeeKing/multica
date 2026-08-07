@@ -2,11 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { hashKey, keepPreviousData, useQuery } from "@tanstack/react-query";
-import type { QueryKey } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import type {
   Issue,
-  IssueAssigneeGroup,
   IssueStatus,
   IssueTableFacetSpec,
   IssueTableFacetsResponse,
@@ -19,11 +17,7 @@ import { workspaceWorkingAgentsOptions } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { ALL_STATUSES } from "@multica/core/issues/config";
 import { dateOnlyToLocalDate } from "@multica/core/issues/date";
-import type {
-  AssigneeGroupedIssuesFilter,
-  IssueSortParam,
-  MyIssuesFilter,
-} from "@multica/core/issues/queries";
+import type { IssueSortParam } from "@multica/core/issues/queries";
 import { issueTableFacetsOptions } from "@multica/core/issues/queries";
 import {
   buildIssueSurfaceQueryPlan,
@@ -85,12 +79,6 @@ export interface IssueSurfaceController {
    *  number it cannot stand behind. */
   workingAgents: WorkingAgentSummary[] | undefined;
   filteredGanttIssues: Issue[];
-  assigneeGroups?: IssueAssigneeGroup[];
-  assigneeGroupQueryKey?: QueryKey;
-  assigneeGroupFilter?: AssigneeGroupedIssuesFilter;
-  filter: MyIssuesFilter;
-  loadMoreScope?: string;
-  loadMoreFilter?: MyIssuesFilter;
   sort: IssueSortParam;
   ganttIssues: Issue[];
   visibleStatuses: IssueStatus[];
@@ -319,8 +307,6 @@ export function useIssueSurfaceController({
     groupingPropertyId && catalogSettled && !activeGroupingProperty
       ? "status"
       : grouping;
-  const usesAssigneeBoard =
-    effectiveViewMode === "board" && effectiveGrouping === "assignee";
   const usesGantt = effectiveViewMode === "gantt" && !!projectId;
   const usesTable = effectiveViewMode === "table";
   const activeSearch = usesTable ? tableSearch : search;
@@ -681,13 +667,11 @@ export function useIssueSurfaceController({
     wsId,
     queryPlan,
     projectId,
-    usesAssigneeBoard,
     usesGantt,
     usesTable,
     serverStatusBranches,
     serverGroupBranches,
     ganttShowCompleted,
-    sort,
     statusFilters,
     priorityFilters,
     assigneeFilters,

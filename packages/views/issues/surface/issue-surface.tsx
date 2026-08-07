@@ -223,10 +223,8 @@ function IssueSurfaceContent({
   // fresh array every render, defeating BoardView's memo.
   const boardIssues = useMemo(
     () =>
-      controller.assigneeGroups
-        ? controller.assigneeGroups.flatMap((group) => group.issues)
-        : issues,
-    [controller.assigneeGroups, issues],
+      issues,
+    [issues],
   );
   const shouldShowClientEmpty =
     !!clientFilter &&
@@ -306,17 +304,11 @@ function IssueSurfaceContent({
             {controller.viewMode === "board" && (
               <BoardView
                 issues={boardIssues}
-                assigneeGroups={controller.assigneeGroups}
-                assigneeGroupQueryKey={controller.assigneeGroupQueryKey}
-                assigneeGroupFilter={controller.assigneeGroupFilter}
                 visibleStatuses={controller.visibleStatuses}
                 hiddenStatuses={controller.hiddenStatuses}
                 onMoveIssue={controller.moveIssue}
                 childProgressMap={controller.childProgressMap}
                 projectMap={controller.projectMap}
-                myIssuesScope={controller.loadMoreScope}
-                myIssuesFilter={controller.loadMoreFilter}
-                sort={controller.sort}
                 projectId={controller.projectId}
                 onCreateIssue={openCreateIssue}
                 statusPagination={controller.statusPagination}
@@ -360,9 +352,6 @@ function IssueSurfaceContent({
                 onMoveIssue={controller.moveIssue}
                 childProgressMap={controller.childProgressMap}
                 projectMap={controller.projectMap}
-                myIssuesScope={controller.loadMoreScope}
-                myIssuesFilter={controller.loadMoreFilter}
-                sort={controller.sort}
                 projectId={controller.projectId}
                 onCreateIssue={openCreateIssue}
                 groupBranches={controller.groupBranches}

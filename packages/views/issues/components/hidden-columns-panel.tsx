@@ -54,7 +54,7 @@ export function HiddenColumnRow({
   total,
 }: {
   status: IssueStatus;
-  total: number;
+  total?: number;
 }) {
   const { t } = useT("issues");
   const viewStoreApi = useViewStoreApi();
@@ -65,7 +65,7 @@ export function HiddenColumnRow({
         <span className="text-body">{t(($) => $.status[status])}</span>
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-caption text-muted-foreground">{total}</span>
+        <span className="text-caption text-muted-foreground">{total ?? ""}</span>
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
