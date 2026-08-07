@@ -92,9 +92,20 @@ func (q *Queries) ArchiveInboxByIssue(ctx context.Context, arg ArchiveInboxByIss
 }
 
 const archiveInboxByIssueAndType = `-- name: ArchiveInboxByIssueAndType :many
-UPDATE inbox_item SET archived = true, dismissed_at = now()
-WHERE workspace_id = $1 AND issue_id = $2 AND type = $3 AND archived = false
-RETURNING recipient_type, recipient_id
+WITH previously_active AS (
+    SELECT inbox_item.recipient_type, inbox_item.recipient_id
+    FROM inbox_item
+    WHERE inbox_item.workspace_id = $1 AND inbox_item.issue_id = $2
+      AND inbox_item.type = $3 AND inbox_item.archived = false
+),
+stamped AS (
+    UPDATE inbox_item
+    SET archived = true, dismissed_at = now()
+    WHERE inbox_item.workspace_id = $1 AND inbox_item.issue_id = $2
+      AND inbox_item.type = $3 AND inbox_item.dismissed_at IS NULL
+    RETURNING 1
+)
+SELECT recipient_type, recipient_id FROM previously_active
 `
 
 type ArchiveInboxByIssueAndTypeParams struct {
@@ -115,6 +126,16 @@ type ArchiveInboxByIssueAndTypeRow struct {
 // the issue. Without the distinction the v2 mirror, which derives `archived`
 // for a whole group from the group's own archive state, would set these rows
 // back to active on the next delivery — see migration 275.
+// The stamp is applied to every matching row that is not already dismissed,
+// INCLUDING rows that are already archived. Restricting it to archived = false
+// looked equivalent while archive was purely a user action, but the v2 mirror
+// sets archived = true for every row of an archived group: an issue reaching a
+// terminal status while its group was archived would then stamp nothing, and
+// un-archiving later would bring the stale task_failed row back to life.
+//
+// The returned set is still only the rows that were ACTIVE before the stamp, so
+// the websocket fan-out keeps notifying exactly the recipients whose visible
+// inbox actually changed.
 func (q *Queries) ArchiveInboxByIssueAndType(ctx context.Context, arg ArchiveInboxByIssueAndTypeParams) ([]ArchiveInboxByIssueAndTypeRow, error) {
 	rows, err := q.db.Query(ctx, archiveInboxByIssueAndType, arg.WorkspaceID, arg.IssueID, arg.Type)
 	if err != nil {

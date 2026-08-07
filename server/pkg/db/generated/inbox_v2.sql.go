@@ -123,22 +123,25 @@ func (q *Queries) AdvanceInboxGroupForItem(ctx context.Context, arg AdvanceInbox
 }
 
 const claimInboxItemsForSource = `-- name: ClaimInboxItemsForSource :execrows
-WITH numbered AS (
+WITH high_water AS (
+    SELECT COALESCE(MAX(event_seq), 0) AS mark FROM inbox_item WHERE group_id = $1
+),
+numbered AS (
     SELECT id,
-           ROW_NUMBER() OVER (ORDER BY created_at, id) + $2::bigint AS seq
+           ROW_NUMBER() OVER (ORDER BY created_at, id) + (SELECT mark FROM high_water) AS seq
     FROM inbox_item
-    WHERE inbox_item.workspace_id = $3
+    WHERE inbox_item.workspace_id = $2
       AND inbox_item.recipient_type = 'member'
-      AND inbox_item.recipient_id = $4
+      AND inbox_item.recipient_id = $3
       AND inbox_item.group_id IS NULL
       AND (
             -- An issue source claims every unclaimed row for that issue.
-            ($5::text = 'issue' AND inbox_item.issue_id = $6::uuid)
+            ($4::text = 'issue' AND inbox_item.issue_id = $5::uuid)
             -- A standalone source is ONE row, addressed by its own id. Folding
             -- all of a person's issue-less rows into one group would merge
             -- unrelated notifications — an autopilot pause and a failed quick
             -- create have nothing to do with each other.
-         OR ($5::text = 'standalone' AND inbox_item.id = $6::uuid)
+         OR ($4::text = 'standalone' AND inbox_item.id = $5::uuid)
           )
 )
 UPDATE inbox_item i
@@ -150,7 +153,6 @@ WHERE i.id = numbered.id
 
 type ClaimInboxItemsForSourceParams struct {
 	GroupID     pgtype.UUID `json:"group_id"`
-	SeqOffset   int64       `json:"seq_offset"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	RecipientID pgtype.UUID `json:"recipient_id"`
 	SourceKind  string      `json:"source_kind"`
@@ -160,12 +162,19 @@ type ClaimInboxItemsForSourceParams struct {
 // Lazy migration: attach this person's unclaimed rows for one source to a group
 // and number them. Must be called with the group row already locked.
 //
-// @seq_offset is the group's current latest_seq. Numbering continues from there
-// rather than restarting at 1, because a group can already hold events: the
-// write gate opens, a new notification lands on an empty group as event_seq 1,
-// and only afterwards does this person's page load and claim the history. A
-// ROW_NUMBER() that always started at 1 would collide with that row on
-// inbox_item_group_seq_uidx.
+// Numbering continues from the group's HIGH-WATER MARK, which the query reads
+// itself rather than taking as a parameter.
+//
+// Not latest_seq: that points at the representative row and moves DOWN when a
+// dismissal retires the head, while the dismissed row keeps its number. A gap
+// row claimed after such a dismissal — rollback windows produce them — would be
+// handed a sequence that is still occupied and collide on
+// inbox_item_group_seq_uidx. The high-water mark and the representative are
+// different questions, the same way they are for a new delivery.
+//
+// Starting at 1 unconditionally would collide too: the gate opens, a new
+// notification lands on an empty group as event_seq 1, and only afterwards does
+// this person's page load and claim the history.
 //
 // The delivery path calls this under the group lock BEFORE allocating its own
 // sequence, which is what keeps the offset zero in practice: history is claimed
@@ -180,7 +189,6 @@ type ClaimInboxItemsForSourceParams struct {
 func (q *Queries) ClaimInboxItemsForSource(ctx context.Context, arg ClaimInboxItemsForSourceParams) (int64, error) {
 	result, err := q.db.Exec(ctx, claimInboxItemsForSource,
 		arg.GroupID,
-		arg.SeqOffset,
 		arg.WorkspaceID,
 		arg.RecipientID,
 		arg.SourceKind,
@@ -462,19 +470,20 @@ func (q *Queries) NextInboxItemSeqForGroup(ctx context.Context, groupID pgtype.U
 }
 
 const recomputeInboxGroupRepresentative = `-- name: RecomputeInboxGroupRepresentative :one
+WITH survivor AS (
+    SELECT event_seq, id, created_at
+    FROM inbox_item
+    WHERE group_id = $2 AND dismissed_at IS NULL
+    ORDER BY event_seq DESC
+    LIMIT 1
+)
 UPDATE inbox_group g
-SET latest_seq       = COALESCE(s.max_seq, 0),
-    latest_event_id  = s.max_id,
-    latest_event_at  = COALESCE(s.max_at, g.latest_event_at),
-    read_through_seq = LEAST(g.read_through_seq, COALESCE(s.max_seq, 0)),
+SET latest_seq       = COALESCE((SELECT event_seq FROM survivor), 0),
+    latest_event_id  = (SELECT id FROM survivor),
+    latest_event_at  = COALESCE((SELECT created_at FROM survivor), g.latest_event_at),
+    read_through_seq = LEAST(g.read_through_seq, COALESCE((SELECT event_seq FROM survivor), 0)),
     state_version    = g.state_version + 1,
     updated_at       = $1
-FROM (
-    SELECT
-        (SELECT event_seq FROM inbox_item WHERE group_id = $2 AND dismissed_at IS NULL ORDER BY event_seq DESC LIMIT 1) AS max_seq,
-        (SELECT id         FROM inbox_item WHERE group_id = $2 ORDER BY event_seq DESC LIMIT 1) AS max_id,
-        (SELECT created_at FROM inbox_item WHERE group_id = $2 AND dismissed_at IS NULL ORDER BY event_seq DESC LIMIT 1) AS max_at
-) s
 WHERE g.id = $2
 RETURNING g.id, g.workspace_id, g.recipient_id, g.source_kind, g.source_id, g.latest_seq, g.latest_event_id, g.latest_event_at, g.read_through_seq, g.manual_unread, g.state_version, g.archived_at, g.snoozed_until, g.surfaced_at, g.created_at, g.updated_at
 `
@@ -496,6 +505,19 @@ type RecomputeInboxGroupRepresentativeParams struct {
 // Dismissed rows are excluded from the search. A dismissed notification is one
 // the user was deliberately shown the back of; electing it as the row that
 // represents the group would put it straight back in front of them.
+// All three pointers come from ONE survivor row, read once.
+//
+// Three independent scalar subqueries let them disagree: the first version of
+// this query filtered dismissed rows out of the seq and the timestamp but not
+// out of the id, so retiring the newest task_failed left latest_seq pointing at
+// the survivor while latest_event_id still pointed at the dismissed row — and
+// with nothing but dismissed rows left, latest_seq went to 0 while
+// latest_event_id stayed non-null. A single CTE makes that class of skew
+// unrepresentable rather than merely fixed.
+//
+// No survivor at all is a real state: every row dismissed. latest_event_id goes
+// NULL and latest_seq 0, so the group reads as empty rather than pointing at
+// something the user was shown the back of.
 func (q *Queries) RecomputeInboxGroupRepresentative(ctx context.Context, arg RecomputeInboxGroupRepresentativeParams) (InboxGroup, error) {
 	row := q.db.QueryRow(ctx, recomputeInboxGroupRepresentative, arg.Now, arg.ID)
 	var i InboxGroup

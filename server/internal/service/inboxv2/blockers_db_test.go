@@ -151,7 +151,7 @@ func TestStandaloneHistoryRowsBecomeSeparateGroups(t *testing.T) {
 	claimed, err := f.q.ClaimInboxItemsForSource(ctx, db.ClaimInboxItemsForSourceParams{
 		WorkspaceID: f.ws, RecipientID: f.user,
 		SourceKind: string(SourceStandalone), SourceID: a,
-		GroupID: group.ID, SeqOffset: 0,
+		GroupID: group.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -284,5 +284,197 @@ func TestActivationWaitsForInFlightDeliveries(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("activation never completed after the delivery committed")
+	}
+}
+
+// Round 2, blocker 1. All three representative pointers must come from the same
+// surviving row. Filtering dismissed rows out of the sequence but not out of the
+// id left latest_seq on the survivor while latest_event_id still addressed the
+// dismissed one.
+func TestRepresentativePointersAllComeFromTheSurvivor(t *testing.T) {
+	f := newFixture(t, true)
+	ctx := context.Background()
+
+	first, err := f.w.Deliver(ctx, f.delivery("v1:"+uuid.NewString()), f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := f.delivery("v1:" + uuid.NewString())
+	failed.Type = "task_failed"
+	failedRes, err := f.w.Deliver(ctx, failed, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.q.ArchiveInboxByIssueAndType(ctx, db.ArchiveInboxByIssueAndTypeParams{
+		WorkspaceID: f.ws, IssueID: f.issue, Type: "task_failed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	group, err := f.q.RecomputeInboxGroupRepresentative(ctx, db.RecomputeInboxGroupRepresentativeParams{
+		ID: failedRes.Group.ID, Now: pgtype.Timestamptz{Time: f.now, Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if group.LatestSeq != first.Item.EventSeq.Int64 {
+		t.Fatalf("latest_seq = %d, want the survivor's %d", group.LatestSeq, first.Item.EventSeq.Int64)
+	}
+	if group.LatestEventID != first.Item.ID {
+		t.Fatal("latest_event_id still addresses the dismissed row — the pointers disagree")
+	}
+	if !group.LatestEventAt.Time.Equal(first.Item.CreatedAt.Time) {
+		t.Fatal("latest_event_at came from a different row than latest_event_id")
+	}
+}
+
+// Every row dismissed is a real state, not an impossible one. The group must
+// read as empty rather than keeping a pointer to something the user was
+// deliberately shown the back of.
+func TestRepresentativeWithNoSurvivorIsEmpty(t *testing.T) {
+	f := newFixture(t, true)
+	ctx := context.Background()
+
+	only := f.delivery("v1:" + uuid.NewString())
+	only.Type = "task_failed"
+	res, err := f.w.Deliver(ctx, only, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.q.ArchiveInboxByIssueAndType(ctx, db.ArchiveInboxByIssueAndTypeParams{
+		WorkspaceID: f.ws, IssueID: f.issue, Type: "task_failed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	group, err := f.q.RecomputeInboxGroupRepresentative(ctx, db.RecomputeInboxGroupRepresentativeParams{
+		ID: res.Group.ID, Now: pgtype.Timestamptz{Time: f.now, Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.LatestSeq != 0 {
+		t.Fatalf("latest_seq = %d, want 0 with every row dismissed", group.LatestSeq)
+	}
+	if group.LatestEventID.Valid {
+		t.Fatal("latest_event_id must be NULL when nothing survives")
+	}
+	if IsUnread(group) {
+		t.Fatal("a group whose every row is dismissed must not read as unread")
+	}
+}
+
+// Round 2, blocker 2. An issue reaching a terminal status while its group is
+// already archived must still stamp the dismissal. Otherwise un-archiving later
+// brings the stale task_failed row back.
+func TestDismissalStampsEvenWhenTheGroupIsAlreadyArchived(t *testing.T) {
+	f := newFixture(t, true)
+	ctx := context.Background()
+
+	if _, err := f.w.Deliver(ctx, f.delivery("v1:"+uuid.NewString()), f.now); err != nil {
+		t.Fatal(err)
+	}
+	failed := f.delivery("v1:" + uuid.NewString())
+	failed.Type = "task_failed"
+	failedRes, err := f.w.Deliver(ctx, failed, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The user archives the whole group first; the mirror sets every row
+	// archived = true.
+	if _, err := f.pool.Exec(ctx, `
+UPDATE inbox_group SET archived_at = now(), read_through_seq = latest_seq WHERE id = $1`,
+		failedRes.Group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.q.RefreshInboxItemMirror(ctx, failedRes.Group.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now the issue completes.
+	if _, err := f.q.ArchiveInboxByIssueAndType(ctx, db.ArchiveInboxByIssueAndTypeParams{
+		WorkspaceID: f.ws, IssueID: f.issue, Type: "task_failed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var dismissedAt pgtype.Timestamptz
+	if err := f.pool.QueryRow(ctx,
+		`SELECT dismissed_at FROM inbox_item WHERE id = $1`, failedRes.Item.ID).Scan(&dismissedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !dismissedAt.Valid {
+		t.Fatal("an already-archived row must still be stamped as dismissed")
+	}
+
+	// Un-archive, refresh: the stale failure must stay gone.
+	if _, err := f.pool.Exec(ctx,
+		`UPDATE inbox_group SET archived_at = NULL WHERE id = $1`, failedRes.Group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.q.RefreshInboxItemMirror(ctx, failedRes.Group.ID); err != nil {
+		t.Fatal(err)
+	}
+	var archived bool
+	if err := f.pool.QueryRow(ctx,
+		`SELECT archived FROM inbox_item WHERE id = $1`, failedRes.Item.ID).Scan(&archived); err != nil {
+		t.Fatal(err)
+	}
+	if !archived {
+		t.Fatal("un-archiving the group resurrected a dismissed task_failed row")
+	}
+}
+
+// Round 2, blocker 3. A gap row claimed after a dismissal must take the group's
+// high-water mark, not latest_seq — the dismissed row still occupies its number.
+func TestClaimAfterDismissalUsesTheHighWaterMark(t *testing.T) {
+	f := newFixture(t, true)
+	ctx := context.Background()
+
+	if _, err := f.w.Deliver(ctx, f.delivery("v1:"+uuid.NewString()), f.now); err != nil {
+		t.Fatal(err)
+	}
+	failed := f.delivery("v1:" + uuid.NewString())
+	failed.Type = "task_failed"
+	failedRes, err := f.w.Deliver(ctx, failed, f.now) // seq 2
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.q.ArchiveInboxByIssueAndType(ctx, db.ArchiveInboxByIssueAndTypeParams{
+		WorkspaceID: f.ws, IssueID: f.issue, Type: "task_failed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	group, err := f.q.RecomputeInboxGroupRepresentative(ctx, db.RecomputeInboxGroupRepresentativeParams{
+		ID: failedRes.Group.ID, Now: pgtype.Timestamptz{Time: f.now, Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.LatestSeq != 1 {
+		t.Fatalf("setup: latest_seq = %d, want 1", group.LatestSeq)
+	}
+
+	// A gap row, the shape a rollback window leaves behind.
+	gap := f.insertLegacyRow(t, f.issue, f.now.Add(time.Minute), "new_comment")
+
+	claimed, err := f.q.ClaimInboxItemsForSource(ctx, db.ClaimInboxItemsForSourceParams{
+		WorkspaceID: f.ws, RecipientID: f.user,
+		SourceKind: string(SourceIssue), SourceID: f.issue,
+		GroupID: group.ID,
+	})
+	if err != nil {
+		t.Fatalf("claiming a gap row after a dismissal collided: %v", err)
+	}
+	if claimed != 1 {
+		t.Fatalf("claimed %d rows, want 1", claimed)
+	}
+	var seq pgtype.Int8
+	if err := f.pool.QueryRow(ctx,
+		`SELECT event_seq FROM inbox_item WHERE id = $1`, gap).Scan(&seq); err != nil {
+		t.Fatal(err)
+	}
+	if seq.Int64 != 3 {
+		t.Fatalf("gap row took seq %d, want 3 — 2 is still occupied by the dismissed row", seq.Int64)
 	}
 }

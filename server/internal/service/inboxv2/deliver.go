@@ -215,7 +215,6 @@ func (w *Writer) deliverOnce(ctx context.Context, d Delivery, now time.Time) (Re
 		SourceKind:  string(d.SourceKind),
 		SourceID:    d.SourceID,
 		GroupID:     group.ID,
-		SeqOffset:   group.LatestSeq,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("inboxv2: claim history: %w", err)
