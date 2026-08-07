@@ -2043,66 +2043,88 @@ func sortedStringMapKeys(m map[string]string) []string {
 // supported (it's the baseline transport and the spec does not gate it),
 // so it's not represented here.
 type acpMcpTransportCapabilities struct {
-	// Advertised reports whether the runtime sent an
-	// `agentCapabilities.mcpCapabilities` object at all. A runtime that
-	// omits the block told us nothing about remote transports, which is
-	// not the same as telling us it supports none — see
-	// filterACPMcpServersByCapability for why that distinction matters.
-	Advertised bool
-	HTTP       bool
-	SSE        bool
+	// Declared reports whether a usable `agentCapabilities.mcpCapabilities`
+	// object was present. False covers both an omitted block and a response
+	// we could not read; ACP v1 requires the same fail-closed treatment for
+	// each, so they are not distinguished for filtering. It exists only so
+	// a runtime-specific exception can tell "the runtime said nothing" from
+	// "the runtime said no" — see acpRuntimesToleratingOmittedMcpCapabilities.
+	Declared bool
+	HTTP     bool
+	SSE      bool
 }
 
 // extractACPMcpCapabilities reads `agentCapabilities.mcpCapabilities.http`
-// and `.sse` out of an ACP `initialize` response. An explicitly present
-// block is reported as advertised, so a field the runtime left out of it
-// (or set to false) is an opt-out we honour. A missing block — or an
-// unparseable response — reports Advertised=false, meaning "unknown"
-// rather than "unsupported".
+// and `.sse` out of an ACP `initialize` response.
 //
-// See https://agentclientprotocol.com/protocol/initialization — clients
-// MUST NOT send `mcpServers` entries with a type the agent did not
-// advertise support for.
+// Per ACP v1 capability negotiation, "Clients and Agents MUST treat all
+// capabilities omitted in the initialize request as UNSUPPORTED", and
+// `http` / `sse` have no default beyond false. So an omitted block, an
+// explicit null, a block whose fields have the wrong types, and an
+// unreadable response all resolve to "neither transport supported".
+//
+// See https://agentclientprotocol.com/protocol/v1/initialization#capabilities
 func extractACPMcpCapabilities(result json.RawMessage) acpMcpTransportCapabilities {
 	var r struct {
 		AgentCapabilities struct {
-			McpCapabilities *struct {
-				HTTP bool `json:"http"`
-				SSE  bool `json:"sse"`
-			} `json:"mcpCapabilities"`
+			McpCapabilities json.RawMessage `json:"mcpCapabilities"`
 		} `json:"agentCapabilities"`
 	}
 	if err := json.Unmarshal(result, &r); err != nil {
 		return acpMcpTransportCapabilities{}
 	}
-	caps := r.AgentCapabilities.McpCapabilities
-	if caps == nil {
+	raw := bytes.TrimSpace(r.AgentCapabilities.McpCapabilities)
+	if len(raw) == 0 {
+		return acpMcpTransportCapabilities{}
+	}
+	var caps struct {
+		HTTP bool `json:"http"`
+		SSE  bool `json:"sse"`
+	}
+	// A malformed block (wrong field types, non-object) is unusable, and an
+	// unusable declaration is not a declaration: fall back to unsupported
+	// rather than to the omitted-capabilities exception below.
+	if err := json.Unmarshal(raw, &caps); err != nil {
 		return acpMcpTransportCapabilities{}
 	}
 	return acpMcpTransportCapabilities{
-		Advertised: true,
-		HTTP:       caps.HTTP,
-		SSE:        caps.SSE,
+		Declared: true,
+		HTTP:     caps.HTTP,
+		SSE:      caps.SSE,
 	}
 }
 
+// acpRuntimesToleratingOmittedMcpCapabilities lists ACP backends verified
+// against a real binary to accept http/sse McpServer entries on session/new
+// even though their initialize response carries no mcpCapabilities block.
+//
+// ACP v1 requires an omitted capability to be read as unsupported, so this
+// is a deliberate, narrow exception to the spec default rather than a
+// replacement for it. hermes 0.18.2 declares no mcpCapabilities yet accepts
+// both remote transports, so applying the default there silently discarded
+// every remote MCP server its users configured, with the drop visible only
+// in the daemon log (#6540).
+//
+// Only add a runtime here with evidence from a real binary — an ACP
+// implementation that omits capabilities *and* rejects remote entries would
+// turn a missing tool into a failed session, so the fail-closed default has
+// to stay the rule for everything unverified.
+var acpRuntimesToleratingOmittedMcpCapabilities = map[string]bool{
+	"hermes": true,
+}
+
 // filterACPMcpServersByCapability drops remote MCP entries whose transport
-// the runtime explicitly declined in its initialize response. Stdio entries
+// the runtime did not advertise in its initialize response. Stdio entries
 // (no `type` field) always pass through.
 //
-// Sending an http/sse entry to a runtime that declared it doesn't support
-// the transport is a protocol violation per the ACP spec and can reject the
-// whole session/new request with a JSON-RPC error. Dropping those entries
-// lets the rest of the session start instead of tanking every task on that
-// agent.
+// Sending an http/sse entry to a runtime that doesn't support it is a
+// protocol violation per the ACP spec and can reject the whole session/new
+// request with a JSON-RPC error. Dropping the offending entries lets the
+// rest of the session start instead of tanking every task on that agent.
 //
-// A runtime that omits `mcpCapabilities` entirely is a different case, and
-// treating it as "supports neither" is what made this filter discard working
-// servers: hermes 0.18.2 sends no such block yet accepts both http and sse
-// entries on session/new. Because the drop was daemon-log-only, a configured
-// MCP server simply never showed up, with no signal the user could see
-// (#6540). With no declaration to honour there is no spec violation to
-// avoid, so the entries go out and the runtime decides for itself.
+// The single exception is a runtime listed in
+// acpRuntimesToleratingOmittedMcpCapabilities that declared no capabilities
+// at all; see there for why that case is carved out and why it stays narrow.
 func filterACPMcpServersByCapability(
 	servers []any,
 	caps acpMcpTransportCapabilities,
@@ -2112,9 +2134,9 @@ func filterACPMcpServersByCapability(
 	if len(servers) == 0 {
 		return servers
 	}
-	if !caps.Advertised {
+	if !caps.Declared && acpRuntimesToleratingOmittedMcpCapabilities[backend] {
 		if logger != nil && acpHasRemoteMcpEntry(servers) {
-			logger.Info("runtime advertised no mcpCapabilities; forwarding remote MCP servers and letting the runtime decide",
+			logger.Info("runtime declared no mcpCapabilities; forwarding remote MCP servers under this runtime's verified exception",
 				"backend", backend)
 		}
 		return servers

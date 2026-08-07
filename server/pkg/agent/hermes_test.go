@@ -2798,77 +2798,100 @@ func TestHermesBackendDoesNotPromoteOnTransientRetry(t *testing.T) {
 func TestExtractACPMcpCapabilities(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name          string
-		raw           string
-		wantAdvertise bool
-		wantHTTP      bool
-		wantSSE       bool
+		name         string
+		raw          string
+		wantDeclared bool
+		wantHTTP     bool
+		wantSSE      bool
 	}{
 		{
-			name:          "both true",
-			raw:           `{"protocolVersion":1,"agentCapabilities":{"mcpCapabilities":{"http":true,"sse":true}}}`,
-			wantAdvertise: true,
-			wantHTTP:      true,
-			wantSSE:       true,
+			name:         "both true",
+			raw:          `{"protocolVersion":1,"agentCapabilities":{"mcpCapabilities":{"http":true,"sse":true}}}`,
+			wantDeclared: true,
+			wantHTTP:     true,
+			wantSSE:      true,
 		},
 		{
-			name:          "http only",
-			raw:           `{"agentCapabilities":{"mcpCapabilities":{"http":true}}}`,
-			wantAdvertise: true,
-			wantHTTP:      true,
-			wantSSE:       false,
+			name:         "http only",
+			raw:          `{"agentCapabilities":{"mcpCapabilities":{"http":true}}}`,
+			wantDeclared: true,
+			wantHTTP:     true,
+			wantSSE:      false,
 		},
 		{
-			name:          "sse only",
-			raw:           `{"agentCapabilities":{"mcpCapabilities":{"sse":true}}}`,
-			wantAdvertise: true,
-			wantHTTP:      false,
-			wantSSE:       true,
+			name:         "sse only",
+			raw:          `{"agentCapabilities":{"mcpCapabilities":{"sse":true}}}`,
+			wantDeclared: true,
+			wantHTTP:     false,
+			wantSSE:      true,
 		},
 		{
-			// An explicit block that opts out of both is a real
-			// declaration and must stay distinguishable from silence.
-			name:          "block present but both false",
-			raw:           `{"agentCapabilities":{"mcpCapabilities":{"http":false,"sse":false}}}`,
-			wantAdvertise: true,
-			wantHTTP:      false,
-			wantSSE:       false,
+			name:         "block present but both false",
+			raw:          `{"agentCapabilities":{"mcpCapabilities":{"http":false,"sse":false}}}`,
+			wantDeclared: true,
+			wantHTTP:     false,
+			wantSSE:      false,
 		},
 		{
-			name:          "empty block still counts as advertised",
-			raw:           `{"agentCapabilities":{"mcpCapabilities":{}}}`,
-			wantAdvertise: true,
-			wantHTTP:      false,
-			wantSSE:       false,
+			name:         "empty block counts as declared",
+			raw:          `{"agentCapabilities":{"mcpCapabilities":{}}}`,
+			wantDeclared: true,
+			wantHTTP:     false,
+			wantSSE:      false,
 		},
 		{
 			// hermes 0.18.2's real initialize response: no block at all.
-			name:          "block missing",
-			raw:           `{"agentCapabilities":{}}`,
-			wantAdvertise: false,
-			wantHTTP:      false,
-			wantSSE:       false,
+			name:         "block omitted",
+			raw:          `{"agentCapabilities":{}}`,
+			wantDeclared: false,
+			wantHTTP:     false,
+			wantSSE:      false,
 		},
 		{
-			name:          "agentCapabilities missing",
-			raw:           `{"protocolVersion":1}`,
-			wantAdvertise: false,
-			wantHTTP:      false,
-			wantSSE:       false,
+			name:         "agentCapabilities missing",
+			raw:          `{"protocolVersion":1}`,
+			wantDeclared: false,
+			wantHTTP:     false,
+			wantSSE:      false,
 		},
 		{
-			name:          "malformed json",
-			raw:           `not json`,
-			wantAdvertise: false,
-			wantHTTP:      false,
-			wantSSE:       false,
+			// An explicit null is not silence and must not reach the
+			// omitted-capabilities exception; it resolves to unsupported.
+			name:         "explicit null block",
+			raw:          `{"agentCapabilities":{"mcpCapabilities":null}}`,
+			wantDeclared: true,
+			wantHTTP:     false,
+			wantSSE:      false,
+		},
+		{
+			// Wrong field types make the block unusable — fall back to the
+			// spec default rather than to the exception.
+			name:         "block with wrong field types",
+			raw:          `{"agentCapabilities":{"mcpCapabilities":{"http":"yes"}}}`,
+			wantDeclared: false,
+			wantHTTP:     false,
+			wantSSE:      false,
+		},
+		{
+			name:         "block is not an object",
+			raw:          `{"agentCapabilities":{"mcpCapabilities":"http"}}`,
+			wantDeclared: false,
+			wantHTTP:     false,
+			wantSSE:      false,
+		},
+		{
+			name:         "malformed json",
+			raw:          `not json`,
+			wantDeclared: false,
+			wantHTTP:     false,
+			wantSSE:      false,
 		},
 	}
 	for _, tc := range tests {
 		got := extractACPMcpCapabilities(json.RawMessage(tc.raw))
-		if got.Advertised != tc.wantAdvertise || got.HTTP != tc.wantHTTP || got.SSE != tc.wantSSE {
-			t.Errorf("%s: got {Advertised:%v HTTP:%v SSE:%v}, want {Advertised:%v HTTP:%v SSE:%v}",
-				tc.name, got.Advertised, got.HTTP, got.SSE, tc.wantAdvertise, tc.wantHTTP, tc.wantSSE)
+		if got.Declared != tc.wantDeclared || got.HTTP != tc.wantHTTP || got.SSE != tc.wantSSE {
+			t.Errorf("%s: got {Declared:%v HTTP:%v SSE:%v}, want {Declared:%v HTTP:%v SSE:%v}",
+				tc.name, got.Declared, got.HTTP, got.SSE, tc.wantDeclared, tc.wantHTTP, tc.wantSSE)
 		}
 	}
 }
@@ -2882,40 +2905,55 @@ func TestFilterACPMcpServersByCapabilityStdioAlwaysPassesThrough(t *testing.T) {
 	servers := []any{
 		map[string]any{"name": "fetch", "command": "uvx"},
 	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Advertised: true}, "hermes", slog.Default())
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Declared: true}, "hermes", slog.Default())
 	if len(got) != 1 {
 		t.Fatalf("len: got %d, want 1", len(got))
 	}
 }
 
-// TestFilterACPMcpServersByCapabilityUnadvertisedForwardsRemoteEntries pins
-// the #6540 fix: a runtime that sends no `mcpCapabilities` block at all has
-// declared nothing, so its user's http/sse servers must still go out rather
-// than being dropped into a daemon log the user never sees. hermes 0.18.2
-// is exactly this case and accepts both transports on session/new.
-func TestFilterACPMcpServersByCapabilityUnadvertisedForwardsRemoteEntries(t *testing.T) {
-	t.Parallel()
-	servers := []any{
+func mixedTransportACPServers() []any {
+	return []any{
 		map[string]any{"name": "stdio", "command": "uvx"},
 		map[string]any{"type": "http", "name": "http", "url": "https://x/mcp"},
 		map[string]any{"type": "sse", "name": "sse", "url": "https://x/sse"},
-	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{}, "hermes", slog.Default())
-	if len(got) != 3 {
-		t.Fatalf("len: got %d, want 3 (nothing advertised means nothing declined)", len(got))
 	}
 }
 
-// An explicit all-false block is a real opt-out and must still be honoured,
-// so the fix above cannot be implemented by ignoring capabilities wholesale.
+// TestFilterACPMcpServersByCapabilityOmittedForwardsOnListedRuntime pins the
+// #6540 exception: hermes 0.18.2 declares no mcpCapabilities yet accepts both
+// remote transports, so applying the ACP default there silently discarded
+// every remote server its users configured.
+func TestFilterACPMcpServersByCapabilityOmittedForwardsOnListedRuntime(t *testing.T) {
+	t.Parallel()
+	got := filterACPMcpServersByCapability(mixedTransportACPServers(), acpMcpTransportCapabilities{}, "hermes", slog.Default())
+	if len(got) != 3 {
+		t.Fatalf("len: got %d, want 3 (hermes is a verified exception)", len(got))
+	}
+}
+
+// ...and the exception must stay scoped to runtimes with real evidence.
+// Everything else keeps the ACP v1 default, where an omitted capability is
+// UNSUPPORTED — forwarding there could turn a missing tool into a failed
+// session on an implementation nobody has tested.
+func TestFilterACPMcpServersByCapabilityOmittedStillDropsOnUnlistedRuntimes(t *testing.T) {
+	t.Parallel()
+	for _, backend := range []string{"kimi", "kiro", "grok", "qoder", "reasonix", "traecli", "qwenpaw"} {
+		got := filterACPMcpServersByCapability(mixedTransportACPServers(), acpMcpTransportCapabilities{}, backend, slog.Default())
+		if len(got) != 1 {
+			t.Errorf("%s: len got %d, want 1 (only stdio survives the spec default)", backend, len(got))
+			continue
+		}
+		if got[0].(map[string]any)["name"] != "stdio" {
+			t.Errorf("%s: kept wrong entry: %v", backend, got[0])
+		}
+	}
+}
+
+// An explicit all-false block is a declaration, not silence, so even a
+// listed runtime honours it — the exception covers absence only.
 func TestFilterACPMcpServersByCapabilityExplicitOptOutStillDrops(t *testing.T) {
 	t.Parallel()
-	servers := []any{
-		map[string]any{"name": "stdio", "command": "uvx"},
-		map[string]any{"type": "http", "name": "http", "url": "https://x/mcp"},
-		map[string]any{"type": "sse", "name": "sse", "url": "https://x/sse"},
-	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Advertised: true}, "hermes", slog.Default())
+	got := filterACPMcpServersByCapability(mixedTransportACPServers(), acpMcpTransportCapabilities{Declared: true}, "hermes", slog.Default())
 	if len(got) != 1 {
 		t.Fatalf("len: got %d, want 1 (only stdio survives an explicit opt-out)", len(got))
 	}
@@ -2931,7 +2969,7 @@ func TestFilterACPMcpServersByCapabilityDropsUnsupportedHttp(t *testing.T) {
 		map[string]any{"type": "http", "name": "http-drop", "url": "https://x/mcp"},
 		map[string]any{"type": "sse", "name": "sse-keep", "url": "https://x/sse"},
 	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Advertised: true, SSE: true}, "hermes", slog.Default())
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Declared: true, SSE: true}, "hermes", slog.Default())
 	if len(got) != 2 {
 		t.Fatalf("len: got %d, want 2 (http should be dropped, sse kept)", len(got))
 	}
@@ -2950,7 +2988,7 @@ func TestFilterACPMcpServersByCapabilityDropsUnsupportedSse(t *testing.T) {
 		map[string]any{"type": "sse", "name": "sse-drop", "url": "https://x/sse"},
 		map[string]any{"type": "http", "name": "http-keep", "url": "https://x/mcp"},
 	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Advertised: true, HTTP: true}, "kimi", slog.Default())
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Declared: true, HTTP: true}, "kimi", slog.Default())
 	if len(got) != 1 {
 		t.Fatalf("len: got %d, want 1", len(got))
 	}
@@ -2966,7 +3004,7 @@ func TestFilterACPMcpServersByCapabilityKeepsAllWhenBothSupported(t *testing.T) 
 		map[string]any{"type": "http", "name": "http", "url": "https://x/mcp"},
 		map[string]any{"type": "sse", "name": "sse", "url": "https://x/sse"},
 	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Advertised: true, HTTP: true, SSE: true}, "kiro", slog.Default())
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{Declared: true, HTTP: true, SSE: true}, "kiro", slog.Default())
 	if len(got) != 3 {
 		t.Fatalf("len: got %d, want 3", len(got))
 	}
@@ -3317,14 +3355,13 @@ func TestHermesResumeIncludesMcpServers(t *testing.T) {
 	}
 }
 
-// TestHermesForwardsRemoteMcpWhenCapabilityNotAdvertised pins the #6540
-// fix: a runtime whose initialize response carries no mcpCapabilities block
-// has declared nothing about remote transports, so there is no declaration
-// to violate and the user's http/sse servers must still reach session/new.
-// Dropping them here is what made a configured MCP server vanish with no
-// user-visible signal. Real hermes 0.18.2 responds exactly like this fake
-// and accepts both transports.
-func TestHermesForwardsRemoteMcpWhenCapabilityNotAdvertised(t *testing.T) {
+// TestHermesForwardsRemoteMcpUnderOmittedCapabilitiesException pins the
+// #6540 fix end to end. Real hermes 0.18.2 responds exactly like this fake —
+// no mcpCapabilities block — while accepting both remote transports, so it
+// is on the verified exception list and its users' http/sse servers must
+// reach session/new instead of vanishing into a daemon log. Runtimes off
+// that list keep the ACP v1 default; see the qoder counterpart.
+func TestHermesForwardsRemoteMcpUnderOmittedCapabilitiesException(t *testing.T) {
 	t.Parallel()
 
 	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
