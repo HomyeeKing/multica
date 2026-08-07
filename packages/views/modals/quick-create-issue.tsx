@@ -56,7 +56,7 @@ import {
   type Squad,
 } from "@multica/core/types";
 import { ActorAvatar } from "../common/actor-avatar";
-import { PillButton } from "../common/pill-button";
+import { ClearablePillButton, PillButton } from "../common/pill-button";
 import { ProjectPicker } from "../projects/components/project-picker";
 import { DueDatePicker, PriorityIcon, PriorityPicker } from "../issues/components";
 import { canAssignAgent } from "../issues/components/pickers/assignee-picker";
@@ -115,6 +115,7 @@ export function AgentCreatePanel({
   setIsExpanded: (v: boolean) => void;
 }) {
   const { t } = useT("modals");
+  const { t: tProjects } = useT("projects");
   const sendShortcut = useShortcut("send");
   const workspaceName = useCurrentWorkspace()?.name;
   const workspacePaths = useWorkspacePaths();
@@ -266,6 +267,12 @@ export function AgentCreatePanel({
     (data?.due_date as string | undefined) ?? draft.shared.dueDate,
   );
   const [fieldPickerOpen, setFieldPickerOpen] = useState<QuickCreateField | null>(null);
+  // Local state + shared draft always move together, so both the picker rows
+  // and the pill's quick-clear go through here.
+  const commitProject = (next: string | null) => {
+    setProjectId(next);
+    setShared({ projectId: next ?? undefined });
+  };
 
   // Parent-issue context — seeded by `openCreateSubIssue` when the modal is
   // opened from the "Add sub issue" entry on an existing issue. We carry it
@@ -658,12 +665,13 @@ export function AgentCreatePanel({
             fieldPickerOpen === "project") && (
             <ProjectPicker
               projectId={projectId}
-              onUpdate={(u) => {
-                const next = u.project_id ?? null;
-                setProjectId(next);
-                setShared({ projectId: next ?? undefined });
-              }}
-              triggerRender={<PillButton />}
+              onUpdate={(u) => commitProject(u.project_id ?? null)}
+              triggerRender={
+                <ClearablePillButton
+                  onClear={projectId !== null ? () => commitProject(null) : undefined}
+                  clearLabel={tProjects(($) => $.picker.clear_aria)}
+                />
+              }
               align="start"
               open={fieldPickerOpen === "project" ? true : undefined}
               onOpenChange={(open) => setFieldPickerOpen(open ? "project" : null)}

@@ -211,15 +211,16 @@ vi.mock("../issues/components", () => ({
 }));
 
 vi.mock("../projects/components/project-picker", () => ({
-  ProjectPicker: ({ projectId, onUpdate }: any) => (
-    <button type="button" data-testid="project-picker" onClick={() => onUpdate({ project_id: "proj-1" })}>
-      Project {projectId ?? "none"}
-    </button>
+  ProjectPicker: ({ projectId, onUpdate, triggerRender }: any) => (
+    <>
+      <button type="button" data-testid="project-picker" onClick={() => onUpdate({ project_id: "proj-1" })}>
+        Project {projectId ?? "none"}
+      </button>
+      {/* The caller's own trigger renders too — the pill carries the
+          quick-clear ×, which belongs to this panel, not to the picker. */}
+      {triggerRender}
+    </>
   ),
-}));
-
-vi.mock("../common/pill-button", () => ({
-  PillButton: ({ children, ...props }: any) => <button type="button" {...props}>{children}</button>,
 }));
 
 vi.mock("@multica/ui/components/ui/dropdown-menu", () => ({
@@ -403,9 +404,12 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../locales/en/common.json";
 import enModals from "../locales/en/modals.json";
 import enEditor from "../locales/en/editor.json";
+import enProjects from "../locales/en/projects.json";
 import { AgentCreatePanel } from "./quick-create-issue";
 
-const TEST_RESOURCES = { en: { common: enCommon, modals: enModals, editor: enEditor } };
+const TEST_RESOURCES = {
+  en: { common: enCommon, modals: enModals, editor: enEditor, projects: enProjects },
+};
 
 function renderPanel(props: React.ComponentProps<typeof AgentCreatePanel>) {
   return render(
@@ -798,6 +802,36 @@ describe("AgentCreatePanel", () => {
 
     await waitFor(() => {
       expect(mockSetLastProjectId).toHaveBeenCalledWith(null);
+    });
+  });
+
+  // Dropping a project used to cost two clicks — open the popover, hit
+  // "No project" — because the pill had no clear affordance of its own
+  // (MUL-5862). The × is part of the pill, so it only exists once the field
+  // has a value to drop.
+  describe("project pill quick-clear", () => {
+    it("has no × while no project is selected", () => {
+      renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+
+      expect(screen.getByTestId("project-picker")).toHaveTextContent("Project none");
+      expect(screen.queryByRole("button", { name: "Clear project" })).not.toBeInTheDocument();
+    });
+
+    it("clears local state and the shared draft in one click", async () => {
+      const user = userEvent.setup();
+      mockQuickCreateStore.lastProjectId = "proj-1";
+      mockProjectsQuery.data = [{ id: "proj-1", title: "Web", icon: null }];
+      mockProjectsQuery.isSuccess = true;
+
+      renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+      expect(screen.getByTestId("project-picker")).toHaveTextContent("Project proj-1");
+
+      await user.click(screen.getByRole("button", { name: "Clear project" }));
+
+      expect(screen.getByTestId("project-picker")).toHaveTextContent("Project none");
+      expect(mockSetShared).toHaveBeenCalledWith({ projectId: undefined });
+      // The × retires with the value it cleared.
+      expect(screen.queryByRole("button", { name: "Clear project" })).not.toBeInTheDocument();
     });
   });
 
