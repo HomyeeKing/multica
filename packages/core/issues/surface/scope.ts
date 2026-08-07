@@ -18,6 +18,32 @@ export type IssueScope =
     }
   | { type: "team"; teamId: string };
 
+/**
+ * THE single translation between the UI's coarse assignee-type tab and the
+ * API's `assignee_types` values. Every channel (list GET params, table
+ * query spec, gantt) must compile the tab through this function — do not
+ * inline the literal arrays anywhere else.
+ */
+export function assigneeTypesForActorKind(
+  actorKind: WorkspaceIssueActorKind | undefined,
+): IssueAssigneeType[] | undefined {
+  switch (actorKind) {
+    case "members":
+      return ["member"];
+    case "agents":
+      return ["agent", "squad"];
+    default:
+      return undefined;
+  }
+}
+
+/** Saved-view scope_variant → tab. Unknown/absent variants mean "all". */
+export function actorKindForViewVariant(
+  variant: string | null | undefined,
+): WorkspaceIssueActorKind {
+  return variant === "members" || variant === "agents" ? variant : "all";
+}
+
 export class UnsupportedIssueScopeError extends Error {
   constructor(scope: IssueScope, operation: string) {
     super(`Issue scope "${issueScopeKey(scope)}" is not supported for ${operation}.`);

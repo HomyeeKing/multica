@@ -20,7 +20,11 @@ import { ViewBaselineProvider, useViewBaseline } from "./view-baseline-context";
 import type { IssueViewScope } from "@multica/core/issue-views/queries";
 import { useFeatureEnabled } from "@multica/core/config";
 import { SAVED_ISSUE_VIEWS_FLAG } from "@multica/core/feature-flags";
-import { issueScopeKey, type IssueScope } from "@multica/core/issues/surface/scope";
+import {
+  actorKindForViewVariant,
+  issueScopeKey,
+  type IssueScope,
+} from "@multica/core/issues/surface/scope";
 import type { Issue } from "@multica/core/types";
 import { BoardView } from "../components/board-view";
 import { BatchActionToolbar } from "../components/batch-action-toolbar";
@@ -100,15 +104,7 @@ export function IssueSurface({
   // dialog); a variant-free view resolves to the unrestricted "all".
   const effectiveScope: IssueScope =
     activeView && (scope.type === "workspace" || scope.type === "project")
-      ? {
-          ...scope,
-          actorKind:
-            activeView.scope_variant === "members"
-              ? "members"
-              : activeView.scope_variant === "agents"
-                ? "agents"
-                : "all",
-        }
+      ? { ...scope, actorKind: actorKindForViewVariant(activeView.scope_variant) }
       : scope;
   const store = useMemo(() => {
     // First-open seeding happens HERE, at store-creation time for this key:
@@ -265,13 +261,9 @@ function IssueSurfaceContent({
             onTableFacetChange={controller.setActiveTableFacet}
             saveViewScope={
               scope.type === "project"
-                ? {
-                    kind: "project",
-                    projectId: scope.projectId,
-                    actorKind: scope.actorKind,
-                  }
+                ? { kind: "project", projectId: scope.projectId }
                 : scope.type === "workspace"
-                  ? { kind: "workspace", actorKind: scope.actorKind }
+                  ? { kind: "workspace" }
                   : null
             }
           />

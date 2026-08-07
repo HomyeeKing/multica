@@ -3,7 +3,7 @@ import type {
   AssigneeGroupedIssuesFilter,
   MyIssuesFilter,
 } from "../queries";
-import {
+import { assigneeTypesForActorKind,
   issueScopeKey,
   UnsupportedIssueScopeError,
   type IssueScope,
@@ -86,11 +86,11 @@ export function buildIssueSurfaceQueryPlan(
       // tab gets its own cache entry with correct per-status totals and
       // load-more pagination. Only the unfiltered "all" tab uses the shared
       // workspace list cache.
-      if (scope.actorKind === "members" || scope.actorKind === "agents") {
-        const queryFilter: MyIssuesFilter =
-          scope.actorKind === "members"
-            ? { assignee_types: ["member"] }
-            : { assignee_types: ["agent", "squad"] };
+      const workspaceAssigneeTypes = assigneeTypesForActorKind(scope.actorKind);
+      if (workspaceAssigneeTypes) {
+        const queryFilter: MyIssuesFilter = {
+          assignee_types: workspaceAssigneeTypes,
+        };
         return {
           kind: "scoped",
           scopeKey,
@@ -119,12 +119,10 @@ export function buildIssueSurfaceQueryPlan(
       // Same per-tab narrowing as the workspace scope: the project pages
       // carry the same Members/Agents tabs, and assignee_types composes
       // with project_id on the list and grouped endpoints.
-      const queryFilter: MyIssuesFilter =
-        scope.actorKind === "members"
-          ? { project_id: scope.projectId, assignee_types: ["member"] }
-          : scope.actorKind === "agents"
-            ? { project_id: scope.projectId, assignee_types: ["agent", "squad"] }
-            : { project_id: scope.projectId };
+      const projectAssigneeTypes = assigneeTypesForActorKind(scope.actorKind);
+      const queryFilter: MyIssuesFilter = projectAssigneeTypes
+        ? { project_id: scope.projectId, assignee_types: projectAssigneeTypes }
+        : { project_id: scope.projectId };
       return {
         kind: "scoped",
         scopeKey,

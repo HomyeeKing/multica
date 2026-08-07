@@ -29,7 +29,10 @@ import {
   buildIssueSurfaceQueryPlan,
   type IssueSurfaceQueryPlan,
 } from "@multica/core/issues/surface/query-plan";
-import type { IssueScope } from "@multica/core/issues/surface/scope";
+import {
+  assigneeTypesForActorKind,
+  type IssueScope,
+} from "@multica/core/issues/surface/scope";
 import type { IssueDateFilter, SortField } from "@multica/core/issues/stores/view-store";
 import { propertyListOptions } from "@multica/core/properties";
 import { propertyIdFromViewKey } from "@multica/core/issues/stores/view-store";
@@ -391,27 +394,23 @@ export function useIssueSurfaceController({
   const derivedTableQuerySpec = useMemo<IssueTableQuerySpec>(() => {
     let queryScope: IssueTableQuerySpec["scope"];
     switch (scope.type) {
-      case "workspace":
+      case "workspace": {
+        const assigneeTypes = assigneeTypesForActorKind(scope.actorKind);
         queryScope = {
           kind: "workspace",
-          ...(scope.actorKind === "members"
-            ? { assignee_types: ["member" as const] }
-            : scope.actorKind === "agents"
-              ? { assignee_types: ["agent" as const, "squad" as const] }
-              : {}),
+          ...(assigneeTypes ? { assignee_types: assigneeTypes } : {}),
         };
         break;
-      case "project":
+      }
+      case "project": {
+        const assigneeTypes = assigneeTypesForActorKind(scope.actorKind);
         queryScope = {
           kind: "project",
           project_id: scope.projectId,
-          ...(scope.actorKind === "members"
-            ? { assignee_types: ["member" as const] }
-            : scope.actorKind === "agents"
-              ? { assignee_types: ["agent" as const, "squad" as const] }
-              : {}),
+          ...(assigneeTypes ? { assignee_types: assigneeTypes } : {}),
         };
         break;
+      }
       case "my":
         queryScope = {
           kind: "my",

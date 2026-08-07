@@ -387,11 +387,12 @@ let mockScope = "all";
 vi.mock("@multica/core/issues/stores/issues-scope-store", () => ({
   useIssuesScopeStore: Object.assign(
     (selector?: any) => {
-      const state = { scope: mockScope, setScope: vi.fn() };
+      const state = { scopes: { issues: mockScope }, setScope: vi.fn() };
       return selector ? selector(state) : state;
     },
-    { getState: () => ({ scope: mockScope, setScope: vi.fn() }) },
+    { getState: () => ({ scopes: { issues: mockScope }, setScope: vi.fn() }) },
   ),
+  useIssuesScope: () => mockScope,
 }));
 
 vi.mock("@multica/core/issues/stores/selection-store", () => ({

@@ -1,6 +1,6 @@
 "use client";
 
-import { cloneElement, useEffect, useMemo, useRef, useState } from "react";
+import { cloneElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -107,8 +107,10 @@ import { useFeatureEnabled } from "@multica/core/config";
 import { SAVED_ISSUE_VIEWS_FLAG } from "@multica/core/feature-flags";
 import { addDaysDateOnly, dateOnlyToLocalDate, formatDateOnly, toDateOnly, todayDateOnly } from "@multica/core/issues/date";
 import {
+  useIssuesScope,
   useIssuesScopeStore,
   type IssuesScope,
+  type IssuesScopePageKey,
 } from "@multica/core/issues/stores/issues-scope-store";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n";
@@ -933,8 +935,19 @@ export function IssuesHeader({
   } | null>(null);
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const isViewOwner = !!activeView && activeView.owner_id === currentUserId;
-  const scope = useIssuesScopeStore((s) => s.scope);
-  const setScope = useIssuesScopeStore((s) => s.setScope);
+  // The tab belongs to THIS page (Issues vs each project) — see
+  // IssuesScopePageKey. The header both renders the tabs and seeds the
+  // save-view dialog's default variant from them.
+  const scopePage: IssuesScopePageKey =
+    saveViewScope?.kind === "project"
+      ? `project:${saveViewScope.projectId}`
+      : "issues";
+  const scope = useIssuesScope(scopePage);
+  const setScopeForPage = useIssuesScopeStore((s) => s.setScope);
+  const setScope = useCallback(
+    (next: IssuesScope) => setScopeForPage(scopePage, next),
+    [setScopeForPage, scopePage],
+  );
   // Bind the workspace agents-working chip to the active view store so
   // shared IssuesHeader consumers (/issues and project detail) toggle the
   // same filter state as the rest of the display controls. /my-issues keeps
@@ -1095,7 +1108,11 @@ export function IssuesHeader({
       <SaveViewDialog
         open={saveViewOpen}
         onOpenChange={setSaveViewOpen}
-        scope={saveViewScope}
+        scope={
+          saveViewScope.kind === "my"
+            ? saveViewScope
+            : { ...saveViewScope, actorKind: scope }
+        }
         editView={editTarget?.view ?? null}
         seedFromDefinition={editTarget?.fromDefinition ?? false}
       />

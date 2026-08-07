@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  actorKindForViewVariant,
+  assigneeTypesForActorKind,
   UnsupportedIssueScopeError,
   issueScopeKey,
 } from "./scope";
@@ -150,5 +152,24 @@ describe("issue surface scope", () => {
     expect(() => buildIssueSurfaceQueryPlan(scope)).toThrow(
       UnsupportedIssueScopeError,
     );
+  });
+});
+
+describe("assigneeTypesForActorKind", () => {
+  it("maps the three tabs to their API values", () => {
+    expect(assigneeTypesForActorKind("members")).toEqual(["member"]);
+    expect(assigneeTypesForActorKind("agents")).toEqual(["agent", "squad"]);
+    expect(assigneeTypesForActorKind("all")).toBeUndefined();
+    expect(assigneeTypesForActorKind(undefined)).toBeUndefined();
+  });
+});
+
+describe("actorKindForViewVariant", () => {
+  it("resolves saved-view variants to a tab, defaulting to all", () => {
+    expect(actorKindForViewVariant("members")).toBe("members");
+    expect(actorKindForViewVariant("agents")).toBe("agents");
+    expect(actorKindForViewVariant(null)).toBe("all");
+    expect(actorKindForViewVariant(undefined)).toBe("all");
+    expect(actorKindForViewVariant("involved")).toBe("all");
   });
 });
