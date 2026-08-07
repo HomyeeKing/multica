@@ -44,6 +44,15 @@ export function actorKindForViewVariant(
   return variant === "members" || variant === "agents" ? variant : "all";
 }
 
+/** My-view scope_variant → my-scope relation. Unknown/absent means "all". */
+export function myRelationForViewVariant(
+  variant: string | null | undefined,
+): Extract<IssueScope, { type: "my" }>["relation"] {
+  return variant === "assigned" || variant === "created" || variant === "involved"
+    ? variant
+    : "all";
+}
+
 export class UnsupportedIssueScopeError extends Error {
   constructor(scope: IssueScope, operation: string) {
     super(`Issue scope "${issueScopeKey(scope)}" is not supported for ${operation}.`);

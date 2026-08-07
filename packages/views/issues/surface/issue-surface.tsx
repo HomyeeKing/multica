@@ -23,6 +23,7 @@ import { SAVED_ISSUE_VIEWS_FLAG } from "@multica/core/feature-flags";
 import {
   actorKindForViewVariant,
   issueScopeKey,
+  myRelationForViewVariant,
   type IssueScope,
 } from "@multica/core/issues/surface/scope";
 import type { Issue } from "@multica/core/types";
@@ -98,14 +99,18 @@ export function IssueSurface({
     () => (activeView ? baselineFromQuery(activeView.query) : null),
     [activeView],
   );
-  // While a view is open the workspace scope's assignee-type axis belongs
-  // to the VIEW, not to whichever tab the user stood on: the view's own
-  // scope_variant applies (saved from the tab, switchable in the edit
-  // dialog); a variant-free view resolves to the unrestricted "all".
+  // While a view is open, the scope axis the view captured belongs to the
+  // VIEW, not to whichever tab the user stood on: workspace/project views
+  // carry an assignee-type variant, my views a relation variant. The user's
+  // own tab state is never touched — it is exactly where they left it when
+  // the view closes (or vanishes). A variant-free view resolves to the
+  // unrestricted axis value.
   const effectiveScope: IssueScope =
     activeView && (scope.type === "workspace" || scope.type === "project")
       ? { ...scope, actorKind: actorKindForViewVariant(activeView.scope_variant) }
-      : scope;
+      : activeView && scope.type === "my"
+        ? { ...scope, relation: myRelationForViewVariant(activeView.scope_variant) }
+        : scope;
   const store = useMemo(() => {
     // First-open seeding happens HERE, at store-creation time for this key:
     // no React component has subscribed to the new key's store yet, so the

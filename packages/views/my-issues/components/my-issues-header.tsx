@@ -89,13 +89,6 @@ export function MyIssuesHeader({
     view: IssueView;
     fromDefinition: boolean;
   } | null>(null);
-  // Opening a my-view also restores the tab it was saved under.
-  const VARIANT_TO_TAB: Record<string, MyIssuesScope> = {
-    any: "all",
-    assigned: "assigned",
-    created: "created",
-    involved: "agents",
-  };
   const SCOPES: { value: MyIssuesScope; label: string; description: string }[] = [
     { value: "all", label: t(($) => $.header.scope.all_label), description: t(($) => $.header.scope.all_description) },
     { value: "assigned", label: t(($) => $.header.scope.assigned_label), description: t(($) => $.header.scope.assigned_description) },
@@ -129,13 +122,7 @@ export function MyIssuesHeader({
               }))}
               views={views}
               activeView={activeView}
-              onSelectView={(view) => {
-                setActive(view ? view.id : null);
-                const variant = view?.scope_variant;
-                if (variant && VARIANT_TO_TAB[variant]) {
-                  onScopeChange(VARIANT_TO_TAB[variant]);
-                }
-              }}
+              onSelectView={(view) => setActive(view ? view.id : null)}
               onNewView={() => {
                 setEditTarget(null);
                 setSaveViewOpen(true);

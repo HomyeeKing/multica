@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   actorKindForViewVariant,
   assigneeTypesForActorKind,
+  myRelationForViewVariant,
   UnsupportedIssueScopeError,
   issueScopeKey,
 } from "./scope";
@@ -103,5 +104,16 @@ describe("actorKindForViewVariant", () => {
     expect(actorKindForViewVariant(null)).toBe("all");
     expect(actorKindForViewVariant(undefined)).toBe("all");
     expect(actorKindForViewVariant("involved")).toBe("all");
+  });
+});
+
+describe("myRelationForViewVariant", () => {
+  it("resolves my-view variants to a relation, defaulting to all", () => {
+    expect(myRelationForViewVariant("assigned")).toBe("assigned");
+    expect(myRelationForViewVariant("created")).toBe("created");
+    expect(myRelationForViewVariant("involved")).toBe("involved");
+    expect(myRelationForViewVariant("any")).toBe("all");
+    expect(myRelationForViewVariant(null)).toBe("all");
+    expect(myRelationForViewVariant("members")).toBe("all");
   });
 });
