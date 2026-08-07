@@ -18,7 +18,17 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
-import { ChevronDown, Layers, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  Layers,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  Settings2,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   ContextMenu,
@@ -27,6 +37,12 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@multica/ui/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
 import {
   Popover,
   PopoverContent,
@@ -51,9 +67,10 @@ import { memberListOptions } from "@multica/core/workspace/queries";
 import { pinListOptions } from "@multica/core/pins/queries";
 import { useCreatePin, useDeletePin } from "@multica/core/pins/mutations";
 import { useSingleRowFit } from "../../common/single-row-fit";
+import { ManageViewsDialog } from "./manage-views-dialog";
 import {
   DeleteViewConfirm,
-  ViewListPanel,
+  OverflowListPanel,
   type ViewBarItem,
 } from "./view-bar-popover";
 import { useT } from "../../i18n";
@@ -68,9 +85,11 @@ export interface ViewBarBuiltin {
 
 /** Width shared by every tab: fits short names, truncates long ones. */
 const TAB_MAX_W = "max-w-40";
-/** Reserved px for the trailing trigger in its two shapes. */
-const RESERVE_ICON = 36;
-const RESERVE_PROMOTED = 208;
+/** Reserved px beside the tabs: the [⧉] menu is always there; the "more"
+ *  trigger appears only on overflow; the promoted active tab is widest. */
+const RESERVE_MENU = 36;
+const RESERVE_MORE = RESERVE_MENU + 32;
+const RESERVE_PROMOTED = RESERVE_MENU + 200;
 
 /** One bar tab: sortable in place; suppresses the click that ends a drag. */
 function SortableBarTab({
@@ -148,11 +167,11 @@ function BarTabButton({
 
 /**
  * The view bar: built-in tabs and saved views as one flat, per-user
- * orderable single row. Tabs that don't fit collapse into the trailing
- * popover (which lists everything — reorder, per-row actions, new view).
- * When the OPEN view itself is overflowed it takes the trigger's place,
- * so the active view is always visible. Both reorder surfaces (inline
- * drag, popover drag) write one preference document.
+ * orderable single row. Everything that fits renders as a tab (drag to
+ * reorder, horizontal axis); the rest collapses into a "more" popover
+ * that appears only when needed. The OPEN view is always visible — when
+ * overflowed it takes the trigger slot with its own name. The [⧉] menu
+ * (new view / manage views) is unchanged.
  */
 export function ViewBar({
   wsId,
@@ -183,7 +202,8 @@ export function ViewBar({
   const prefs = preference?.prefs ?? EMPTY_VIEW_BAR_PREFS;
   const updatePreference = useUpdateIssueViewPreference(wsId, scope);
   const deleteView = useDeleteIssueView(wsId);
-  const [listOpen, setListOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [deleting, setDeleting] = useState<IssueView | null>(null);
 
   // The same manage rule the server enforces: owner, or workspace
@@ -239,23 +259,34 @@ export function ViewBar({
   );
 
   // --- single-row fit -----------------------------------------------------
+  // The reserve feeds back into the fit, but only ever grows when items
+  // fall out ("more" trigger, then the promoted active tab), which shrinks
+  // the fit further and keeps them out — the settle is monotonic.
   const activeBarId = activeView ? `view:${activeView.id}` : null;
-  // Promotion feeds back into the reserve: with the wider promoted trigger
-  // the fit can only shrink, which keeps the active tab overflowed — the
-  // two-pass settle is stable.
-  const [promoted, setPromoted] = useState(false);
+  const [reserveTier, setReserveTier] = useState<"menu" | "more" | "promoted">(
+    "menu",
+  );
+  const reserve =
+    reserveTier === "promoted"
+      ? RESERVE_PROMOTED
+      : reserveTier === "more"
+        ? RESERVE_MORE
+        : RESERVE_MENU;
   const { containerRef, measureRef, fitCount } = useSingleRowFit({
     count: visible.length,
     gap: 4,
-    reserve: promoted ? RESERVE_PROMOTED : RESERVE_ICON,
+    reserve,
   });
   const fitting = visible.slice(0, fitCount);
   const overflowed = visible.slice(fitCount);
   const activeOverflowed =
     !!activeBarId && overflowed.some((item) => item.barItemId === activeBarId);
   useEffect(() => {
-    setPromoted(activeOverflowed);
-  }, [activeOverflowed]);
+    setReserveTier(
+      activeOverflowed ? "promoted" : overflowed.length > 0 ? "more" : "menu",
+    );
+  }, [activeOverflowed, overflowed.length]);
+  const promoted = reserveTier === "promoted" && activeOverflowed;
 
   const savePrefs = (next: { hidden: string[]; order: string[] }) => {
     // A drag can land before the views list has loaded; pruning against an
@@ -277,8 +308,8 @@ export function ViewBar({
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    // Reorder within the FULL ordered document so the bar and the popover
-    // edit one list; the dragged item lands adjacent to the drop target.
+    // Reorder within the FULL ordered document so the bar, the "more"
+    // panel and the manage dialog edit one list.
     const ids = ordered.map((item) => item.barItemId);
     const from = ids.indexOf(String(active.id));
     const to = ids.indexOf(String(over.id));
@@ -306,17 +337,18 @@ export function ViewBar({
     }
   };
 
+  const togglePin = (view: IssueView, pinned: boolean) =>
+    pinned
+      ? deletePin.mutate({ itemType: "view", itemId: view.id })
+      : createPin.mutate({ item_type: "view", item_id: view.id });
+
   const selectItem = (item: ViewBarItem) => {
-    if (hiddenSet.has(item.barItemId)) {
-      // Selecting a hidden row implies wanting it back on the bar.
-      toggleHidden(item.barItemId, false);
-    }
     if (item.kind === "builtin") {
       builtinByKey.get(item.barItemId)?.onSelect();
     } else if (item.view) {
       onSelectView(item.view);
     }
-    setListOpen(false);
+    setMoreOpen(false);
   };
 
   const renderViewTab = (item: ViewBarItem) => {
@@ -363,13 +395,7 @@ export function ViewBar({
             </ContextMenuItem>
           )}
           <ContextMenuSeparator />
-          <ContextMenuItem
-            onClick={() =>
-              pinned
-                ? deletePin.mutate({ itemType: "view", itemId: view.id })
-                : createPin.mutate({ item_type: "view", item_id: view.id })
-            }
-          >
+          <ContextMenuItem onClick={() => togglePin(view, pinned)}>
             {pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
             {pinned
               ? t(($) => $.view_bar.context_unpin)
@@ -402,7 +428,7 @@ export function ViewBar({
         sensors={sensors}
         collisionDetection={closestCenter}
         // Same gesture contract as the table's column reordering: tabs slide
-        // along the row only. Overflowed items reorder inside the popover.
+        // along the row only. Overflowed items reorder via the manage dialog.
         modifiers={[restrictToHorizontalAxis]}
         onDragEnd={handleDragEnd}
       >
@@ -439,64 +465,108 @@ export function ViewBar({
         </SortableContext>
       </DndContext>
 
-      <Popover open={listOpen} onOpenChange={setListOpen}>
-        <PopoverTrigger
-          render={
-            promoted && activeView ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className={cn(
-                  TAB_MAX_W,
-                  "shrink-0 gap-1 bg-accent text-accent-foreground hover:bg-accent/80",
-                )}
-              >
-                <span className="truncate">{activeView.name}</span>
-                <ChevronDown className="size-3 shrink-0" />
-              </Button>
-            ) : (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={t(($) => $.view_bar.menu_label)}
-                className="shrink-0 text-muted-foreground"
-              >
-                <Layers className="size-3.5" />
-              </Button>
-            )
-          }
-        />
-        <PopoverContent align="end" className="w-72 p-0">
-          <ViewListPanel
-            items={ordered}
-            hiddenSet={hiddenSet}
-            anchorId={anchorId}
-            activeViewId={activeView?.id ?? null}
-            pinnedViewIds={pinnedViewIds}
-            onReorder={(orderedIds) =>
-              savePrefs({ hidden: [...hiddenSet], order: orderedIds })
+      {/* "More": only exists while something is overflowed. The open view
+          never disappears into it — it becomes the trigger itself. */}
+      {overflowed.length > 0 && (
+        <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+          <PopoverTrigger
+            render={
+              promoted && activeView ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={cn(
+                    TAB_MAX_W,
+                    "shrink-0 gap-1 bg-accent text-accent-foreground hover:bg-accent/80",
+                  )}
+                >
+                  <span className="truncate">{activeView.name}</span>
+                  <ChevronDown className="size-3 shrink-0" />
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label={t(($) => $.view_bar.more_label)}
+                  className="shrink-0 px-1.5 text-muted-foreground"
+                >
+                  <MoreHorizontal className="size-3.5" />
+                </Button>
+              )
             }
-            onToggleHidden={toggleHidden}
-            onSelectItem={selectItem}
-            onEditView={(view) => {
-              setListOpen(false);
-              onEditView(view);
-            }}
-            onDeleteView={confirmDelete}
-            onTogglePin={(view, pinned) =>
-              pinned
-                ? deletePin.mutate({ itemType: "view", itemId: view.id })
-                : createPin.mutate({ item_type: "view", item_id: view.id })
-            }
-            onNewView={() => {
-              setListOpen(false);
-              onNewView();
-            }}
           />
-        </PopoverContent>
-      </Popover>
+          <PopoverContent align="end" className="w-64 p-0">
+            <OverflowListPanel
+              items={overflowed}
+              activeViewId={activeView?.id ?? null}
+              pinnedViewIds={pinnedViewIds}
+              onSelectItem={selectItem}
+              onEditView={(view) => {
+                setMoreOpen(false);
+                onEditView(view);
+              }}
+              onDeleteView={(view) => {
+                setMoreOpen(false);
+                setDeleting(view);
+              }}
+              onTogglePin={togglePin}
+              onToggleHidden={(barItemId) => {
+                setMoreOpen(false);
+                toggleHidden(barItemId, true);
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+      )}
 
-      {/* Context-menu delete shares the popover's confirm. */}
+      <DropdownMenu>
+        <Tooltip>
+          <DropdownMenuTrigger
+            render={
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t(($) => $.view_bar.menu_label)}
+                    className="shrink-0 text-muted-foreground"
+                  >
+                    <Layers className="size-3.5" />
+                  </Button>
+                }
+              />
+            }
+          />
+          <TooltipContent side="bottom">{t(($) => $.view_bar.menu_label)}</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="start" className="w-44">
+          <DropdownMenuItem onClick={onNewView}>
+            <Plus className="size-3.5" />
+            {t(($) => $.view_bar.menu_new)}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setManageOpen(true)}>
+            <Settings2 className="size-3.5" />
+            {t(($) => $.view_bar.menu_manage)}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <ManageViewsDialog
+        open={manageOpen}
+        onOpenChange={setManageOpen}
+        items={ordered}
+        hiddenSet={hiddenSet}
+        anchorId={anchorId}
+        onReorder={(orderedIds) => savePrefs({ hidden: [...hiddenSet], order: orderedIds })}
+        onToggleHidden={toggleHidden}
+        onEditView={(view) => {
+          setManageOpen(false);
+          onEditView(view);
+        }}
+        onDeleteView={confirmDelete}
+      />
+
+      {/* Context-menu / overflow-row delete share one confirm. */}
       <DeleteViewConfirm
         view={deleting}
         onOpenChange={(open) => {

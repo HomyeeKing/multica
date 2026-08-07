@@ -1001,7 +1001,7 @@ export function IssuesHeader({
       <div className="flex w-full min-w-0 items-start justify-between gap-2">
         {/* Left: the view bar — built-in tabs and saved views as one flat,
             per-user ordered row; wraps instead of overflowing. */}
-        <div className="hidden min-w-0 md:block">
+        <div className="hidden min-w-0 flex-1 md:block">
           {savedViewsEnabled && saveViewScope && viewListScope ? (
             <ViewBar
               wsId={headerWsId}

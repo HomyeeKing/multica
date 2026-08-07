@@ -728,6 +728,11 @@
     "context_unpin": "Unpin from sidebar",
     "row_menu": "More actions",
     "row_hide": "Hide from bar",
-    "row_show": "Show on bar"
+    "row_show": "Show on bar",
+    "menu_manage": "Manage views",
+    "manage_title": "Manage views",
+    "manage_hint": "Order and visibility only affect you",
+    "visible_toggle": "Show in view bar",
+    "more_label": "More views"
   }
 }

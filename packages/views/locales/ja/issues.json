@@ -703,6 +703,11 @@
     "context_unpin": "サイドバーから固定解除",
     "row_menu": "その他の操作",
     "row_hide": "バーから隠す",
-    "row_show": "バーに表示"
+    "row_show": "バーに表示",
+    "menu_manage": "ビューを管理",
+    "manage_title": "ビューを管理",
+    "manage_hint": "並び順と表示設定は自分にのみ適用されます",
+    "visible_toggle": "ビューバーに表示",
+    "more_label": "その他のビュー"
   }
 }

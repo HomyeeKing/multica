@@ -703,6 +703,11 @@
     "context_unpin": "사이드바 고정 해제",
     "row_menu": "추가 작업",
     "row_hide": "바에서 숨기기",
-    "row_show": "바에 표시"
+    "row_show": "바에 표시",
+    "menu_manage": "뷰 관리",
+    "manage_title": "뷰 관리",
+    "manage_hint": "순서와 표시 설정은 본인에게만 적용됩니다",
+    "visible_toggle": "뷰 바에 표시",
+    "more_label": "더 많은 뷰"
   }
 }

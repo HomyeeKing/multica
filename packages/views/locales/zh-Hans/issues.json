@@ -703,6 +703,11 @@
     "context_unpin": "从侧栏取消固定",
     "row_menu": "更多操作",
     "row_hide": "在栏中隐藏",
-    "row_show": "在栏中显示"
+    "row_show": "在栏中显示",
+    "menu_manage": "管理视图",
+    "manage_title": "管理视图",
+    "manage_hint": "排序与显隐只影响你自己",
+    "visible_toggle": "在视图栏显示",
+    "more_label": "更多视图"
   }
 }
