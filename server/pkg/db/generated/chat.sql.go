@@ -2499,18 +2499,49 @@ func (q *Queries) ReanchorNextQueuedDirectChatInput(ctx context.Context, arg Rea
 
 const releaseOnboardingKickoffFromTask = `-- name: ReleaseOnboardingKickoffFromTask :exec
 UPDATE chat_message
-SET task_id = NULL
+SET task_id = (
+    SELECT successor.id
+    FROM agent_task_queue AS successor
+    WHERE successor.chat_session_id = chat_message.chat_session_id
+      AND successor.status = 'queued'
+      AND successor.chat_input_task_id = successor.id
+      AND successor.regenerate_quick_actions_for IS NULL
+      AND successor.id <> $1
+    ORDER BY successor.priority DESC, successor.created_at ASC, successor.id ASC
+    LIMIT 1
+)
 WHERE task_id = $1
   AND role = 'user'
   AND message_kind = 'onboarding_kickoff'
 `
 
-// Returns an adopted kickoff to the unowned state when its turn is cancelled or
-// edited away. Without this the kickoff stays bound to a task that no longer
-// runs, so it would never reach a runtime and the member's next message would
-// arrive with no onboarding context at all.
-func (q *Queries) ReleaseOnboardingKickoffFromTask(ctx context.Context, taskID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, releaseOnboardingKickoffFromTask, taskID)
+// Hands an adopted kickoff on to the session's next un-started turn when its
+// own turn dies (terminal failure, cancel, edit), falling back to unowned when
+// there is no such turn.
+//
+// Handing off rather than simply clearing to NULL is what closes the queued
+// successor case. Adoption happens inside a send's transaction, so a message
+// queued WHILE the kickoff's turn was still running found nothing to adopt and
+// never gets another chance: clearing to NULL would leave that already-sealed
+// turn to execute with no onboarding skill, no profile block, and no record
+// that Mika had already greeted the member — exactly the double-introduction
+// this design exists to prevent — while a later message could pick the kickoff
+// up instead, delivering the context to the wrong turn.
+//
+// Target restrictions, each load-bearing:
+//   - status = 'queued' only. A dispatched/running turn has already had its
+//     prompt built from its input batch, so joining it now would consume the
+//     kickoff without ever delivering it.
+//   - chat_input_task_id = id selects roots that own their own input batch. A
+//     retry child names its root instead, and the kickoff is already reachable
+//     through that root, so a retry must not be re-targeted.
+//   - regenerate_quick_actions_for IS NULL skips background suggestion passes,
+//     which carry no user input and are invisible in the transcript.
+//
+// Ordering matches the shared visible-head selector above ListChatMessages, so
+// the kickoff lands on whichever turn the member will actually see run next.
+func (q *Queries) ReleaseOnboardingKickoffFromTask(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, releaseOnboardingKickoffFromTask, id)
 	return err
 }
 

@@ -2492,10 +2492,11 @@ func (s *TaskService) settleQueuedChatInput(
 }
 
 // deleteUserChatInput removes a cancelled/edited turn's member-typed input and
-// releases any onboarding kickoff the turn had adopted, so the member's next
-// send picks the kickoff up again (MUL-5827). The two must happen together:
-// deleting the input while leaving the kickoff bound to the dead task would
-// strand the onboarding context on a run that will never happen.
+// releases any onboarding kickoff the turn had adopted — onto the session's
+// next queued turn when there is one, otherwise back to unowned (MUL-5827).
+// The two must happen together: deleting the input while leaving the kickoff
+// bound to the dead task would strand the onboarding context on a run that
+// will never happen.
 func deleteUserChatInput(ctx context.Context, qtx *db.Queries, inputOwnerID pgtype.UUID) (db.ChatMessage, error) {
 	if err := qtx.ReleaseOnboardingKickoffFromTask(ctx, inputOwnerID); err != nil {
 		return db.ChatMessage{}, fmt.Errorf("release onboarding kickoff: %w", err)
@@ -3955,11 +3956,14 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 		// be claimed between the status flip and this row, placing its user input
 		// before the failure it follows.
 		if t.ChatSessionID.Valid && retried == nil {
-			// This turn is dead, so anything it owned has to go back. An adopted
+			// This turn is dead, so anything it owned has to move on. An adopted
 			// onboarding kickoff would otherwise stay bound to a task that will
-			// never run again: the member's next message would reach Mika with
-			// no onboarding context and no record that she had already greeted
-			// them, and she would introduce herself a second time (MUL-5827).
+			// never run again: the next turn would reach Mika with no onboarding
+			// context and no record that she had already greeted the member, and
+			// she would introduce herself a second time (MUL-5827). The query
+			// hands it to the session's next queued turn — including one the
+			// member queued while THIS turn was still running, which adoption at
+			// send time could not have caught.
 			//
 			// Gated on retried == nil on purpose. A retry child inherits the
 			// root's chat_input_task_id, and the kickoff stays bound to that

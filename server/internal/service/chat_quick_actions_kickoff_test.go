@@ -347,3 +347,154 @@ func TestFailedFirstTurnReleasesTheOnboardingKickoff(t *testing.T) {
 		t.Fatalf("the retry-after-failure turn did not pick the kickoff back up: %+v", batch)
 	}
 }
+
+// TestFailedFirstTurnHandsTheKickoffToAQueuedSuccessor covers the case send-time
+// adoption structurally cannot: the member queues a second message WHILE the
+// first turn is still running, so that send finds nothing to adopt and never
+// gets another chance. If the dying turn only cleared the kickoff to NULL, the
+// already-sealed successor would execute with no onboarding skill, no profile
+// block, and no record that Mika had already greeted them — and a message sent
+// later still could pick the kickoff up, delivering it to the wrong turn.
+func TestFailedFirstTurnHandsTheKickoffToAQueuedSuccessor(t *testing.T) {
+	pool := newResolveOriginatorPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
+
+	var chatSessionID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
+		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
+		t.Fatalf("seed chat session: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, chatSessionID)
+		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+	})
+
+	// Both turns own their own input batch, as a direct send always does.
+	seedTask := func(status string) string {
+		var id string
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, chat_input_task_id)
+			VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), $2, $3, 2, gen_random_uuid())
+			RETURNING id::text`, agentID, chatSessionID, status).Scan(&id); err != nil {
+			t.Fatalf("seed %s task: %v", status, err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE agent_task_queue SET chat_input_task_id = id WHERE id = $1`, id); err != nil {
+			t.Fatalf("stamp input owner: %v", err)
+		}
+		return id
+	}
+
+	// A: the member's first real message, running, having adopted the kickoff.
+	taskA := seedTask("running")
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id, created_at)
+		VALUES ($1, 'user', 'kickoff context', 'onboarding_kickoff', $2, now() - interval '5 minutes'),
+		       ($1, 'user', 'first message', 'message', $2, now() - interval '2 minutes')`,
+		chatSessionID, taskA); err != nil {
+		t.Fatalf("seed turn A: %v", err)
+	}
+
+	// B: queued behind A. Its send found the kickoff already owned, so adoption
+	// was a no-op — this is the turn that must inherit it.
+	taskB := seedTask("queued")
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id, created_at)
+		VALUES ($1, 'user', 'second message', 'message', $2, now() - interval '1 minute')`,
+		chatSessionID, taskB); err != nil {
+		t.Fatalf("seed turn B: %v", err)
+	}
+
+	// A dies.
+	if err := q.ReleaseOnboardingKickoffFromTask(ctx, util.MustParseUUID(taskA)); err != nil {
+		t.Fatalf("ReleaseOnboardingKickoffFromTask: %v", err)
+	}
+
+	batch, err := q.ListChatInputMessages(ctx, util.MustParseUUID(taskB))
+	if err != nil {
+		t.Fatalf("ListChatInputMessages(B): %v", err)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("B's input batch = %d row(s), want the kickoff plus B's message: %+v", len(batch), batch)
+	}
+	if batch[0].MessageKind != protocol.ChatMessageKindOnboardingKickoff {
+		t.Errorf("B would read the member's message before the product context: %+v", batch)
+	}
+	if batch[1].Content != "second message" {
+		t.Errorf("B's own message is missing from its batch: %+v", batch)
+	}
+
+	// Nothing is left unowned, so a later message cannot steal the kickoff.
+	var orphans int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM chat_message
+		 WHERE chat_session_id = $1 AND message_kind = 'onboarding_kickoff' AND task_id IS NULL`,
+		chatSessionID).Scan(&orphans); err != nil {
+		t.Fatalf("count orphans: %v", err)
+	}
+	if orphans != 0 {
+		t.Errorf("kickoff was orphaned instead of handed to the queued successor")
+	}
+}
+
+// A running successor has already had its prompt built from its input batch, so
+// handing it the kickoff would consume the context without ever delivering it.
+// It must fall back to unowned and wait for the member's next send.
+func TestReleaseSkipsAnAlreadyStartedSuccessor(t *testing.T) {
+	pool := newResolveOriginatorPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
+
+	var chatSessionID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
+		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
+		t.Fatalf("seed chat session: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, chatSessionID)
+		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+	})
+
+	seedTask := func(status string) string {
+		var id string
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, chat_input_task_id)
+			VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), $2, $3, 2, gen_random_uuid())
+			RETURNING id::text`, agentID, chatSessionID, status).Scan(&id); err != nil {
+			t.Fatalf("seed %s task: %v", status, err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE agent_task_queue SET chat_input_task_id = id WHERE id = $1`, id); err != nil {
+			t.Fatalf("stamp input owner: %v", err)
+		}
+		return id
+	}
+
+	taskA := seedTask("running")
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id)
+		VALUES ($1, 'user', 'kickoff context', 'onboarding_kickoff', $2)`, chatSessionID, taskA); err != nil {
+		t.Fatalf("seed kickoff: %v", err)
+	}
+	seedTask("dispatched") // successor already claimed
+
+	if err := q.ReleaseOnboardingKickoffFromTask(ctx, util.MustParseUUID(taskA)); err != nil {
+		t.Fatalf("ReleaseOnboardingKickoffFromTask: %v", err)
+	}
+
+	var orphans int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM chat_message
+		 WHERE chat_session_id = $1 AND message_kind = 'onboarding_kickoff' AND task_id IS NULL`,
+		chatSessionID).Scan(&orphans); err != nil {
+		t.Fatalf("count orphans: %v", err)
+	}
+	if orphans != 1 {
+		t.Fatalf("kickoff should wait unowned for the next send, got %d orphan(s)", orphans)
+	}
+}
