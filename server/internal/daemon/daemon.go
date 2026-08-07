@@ -440,7 +440,9 @@ type Daemon struct {
 	// It deliberately includes preparation and local-directory waiters because
 	// restart/update barriers must not kill any claimed task.
 	activeTasks atomic.Int64
-	// runningTasks counts live provider execution sessions. resourceWaitTasks
+	// runningTasks counts live provider execution sessions, beginning only after
+	// backend.Execute returns. It can briefly lag the server-side running state,
+	// which starts during preparation before provider launch. resourceWaitTasks
 	// counts tasks blocked on a local_directory path mutex. Both are diagnostic
 	// /health dimensions and must never replace activeTasks in safety barriers.
 	runningTasks      atomic.Int64
@@ -6748,6 +6750,8 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 		taskLog.Debug("backend execute returned error", "error", err)
 		return agent.Result{}, 0, err
 	}
+	// This counter intentionally starts at the narrower provider-session
+	// boundary, not at the earlier server-side StartTask transition.
 	d.runningTasks.Add(1)
 	defer d.runningTasks.Add(-1)
 	taskLog.Debug("backend started, draining messages")

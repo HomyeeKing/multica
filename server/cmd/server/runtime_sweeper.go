@@ -398,7 +398,8 @@ func broadcastFailedTasks(ctx context.Context, queries *db.Queries, taskSvc *ser
 	}
 }
 
-// reconcileAgentStatus refreshes agent status from the current active task set.
+// reconcileAgentStatus refreshes agent status from the current working task
+// set. A no-op returns no row, so the fallback emits no redundant status event.
 // Used only by the test-fallback path of broadcastFailedTasks above.
 func reconcileAgentStatus(ctx context.Context, queries *db.Queries, bus *events.Bus, agentID pgtype.UUID) {
 	agent, err := queries.RefreshAgentStatusFromTasks(ctx, agentID)

@@ -170,6 +170,56 @@ func TestRefreshAgentStatusFromTasks(t *testing.T) {
 	}
 }
 
+func TestStartTaskSkipsUnchangedAgentStatusWriteAndBroadcast(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+	issueID, agentID, taskID := setupSweeperTestFixture(t, "dispatched")
+	t.Cleanup(func() { cleanupSweeperFixture(t, issueID, agentID) })
+
+	var updatedAtBefore time.Time
+	if err := testPool.QueryRow(ctx, `
+		UPDATE agent
+		SET status = 'working', updated_at = now() - interval '1 hour'
+		WHERE id = $1
+		RETURNING updated_at
+	`, agentID).Scan(&updatedAtBefore); err != nil {
+		t.Fatalf("seed working agent status: %v", err)
+	}
+
+	bus := events.New()
+	statusEvents := 0
+	bus.Subscribe("agent:status", func(events.Event) {
+		statusEvents++
+	})
+	taskService := service.NewTaskService(db.New(testPool), testPool, nil, bus)
+
+	if _, err := taskService.StartTask(ctx, parseUUID(taskID)); err != nil {
+		t.Fatalf("StartTask from dispatched failed: %v", err)
+	}
+
+	var (
+		status         string
+		updatedAtAfter time.Time
+	)
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, updated_at FROM agent WHERE id = $1
+	`, agentID).Scan(&status, &updatedAtAfter); err != nil {
+		t.Fatalf("load agent after StartTask: %v", err)
+	}
+	if status != "working" {
+		t.Fatalf("agent status after StartTask = %q, want working", status)
+	}
+	if !updatedAtAfter.Equal(updatedAtBefore) {
+		t.Fatalf("unchanged status rewrote updated_at: before=%s after=%s", updatedAtBefore, updatedAtAfter)
+	}
+	if statusEvents != 0 {
+		t.Fatalf("unchanged status broadcasts = %d, want 0", statusEvents)
+	}
+}
+
 // TestSweepStaleTasksBroadcastsWithWorkspaceID verifies that when the task sweeper
 // fails a stale running task, the task:failed event is broadcast with the correct
 // WorkspaceID so it reaches frontend WebSocket clients (events without WorkspaceID

@@ -4597,7 +4597,9 @@ func (s *TaskService) ReportProgress(ctx context.Context, taskID string, workspa
 	})
 }
 
-// ReconcileAgentStatus refreshes agent status from the current active task set.
+// ReconcileAgentStatus refreshes agent status from the current working task
+// set. The query returns no row when the status is already correct, which
+// avoids rewriting updated_at and broadcasting a zero-information event.
 func (s *TaskService) ReconcileAgentStatus(ctx context.Context, agentID pgtype.UUID) {
 	agent, err := s.Queries.RefreshAgentStatusFromTasks(ctx, agentID)
 	if err != nil {
