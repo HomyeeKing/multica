@@ -52,6 +52,14 @@ export interface ViewBarItem {
   canManage?: boolean;
 }
 
+/** The vertical-locked row drag has no DragOverlay under the pointer, so
+ *  the grabbing cursor is promoted to the document for the drag's duration
+ *  (see the `data-dnd-dragging` contract in ui/styles/base.css). */
+function setDndCursor(on: boolean) {
+  if (on) document.documentElement.dataset.dndDragging = "true";
+  else delete document.documentElement.dataset.dndDragging;
+}
+
 function SortableRow({
   item,
   hidden,
@@ -169,6 +177,9 @@ export function ManageViewsDialog({
   // Local order during a drag session so rows follow the pointer without a
   // server round-trip per pixel; committed (one PUT) on drop.
   const [localOrder, setLocalOrder] = useState<string[] | null>(null);
+  // If the dialog unmounts mid-drag (close on Escape, view deleted under
+  // us), dnd-kit fires no cancel — clear the document cursor ourselves.
+  useEffect(() => () => setDndCursor(false), []);
   useEffect(() => {
     if (!open) setLocalOrder(null);
   }, [open]);
@@ -221,7 +232,12 @@ export function ManageViewsDialog({
               // auto-scroll is likewise an axis this gesture cannot act on.
               modifiers={[restrictToVerticalAxis]}
               autoScroll={{ threshold: { x: 0, y: 0.15 } }}
-              onDragEnd={handleDragEnd}
+              onDragStart={() => setDndCursor(true)}
+              onDragCancel={() => setDndCursor(false)}
+              onDragEnd={(event) => {
+                setDndCursor(false);
+                handleDragEnd(event);
+              }}
             >
               <SortableContext
                 items={orderedItems.map((item) => item.barItemId)}
