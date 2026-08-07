@@ -182,6 +182,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		invalidEventCount := 0
 		assistantEventCount := 0
 		toolUseCount := 0
+		unreadableAssistantCount := 0
 
 		// On cancellation / timeout, terminate claude (and every MCP server and
 		// tool subprocess it spawned) BEFORE unblocking the scanner. EOF stdin
@@ -233,20 +234,12 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 			switch msg.Type {
 			case "assistant":
 				assistantEventCount++
-				assistantText, tools := b.handleAssistant(msg, msgCh, usage)
-				toolUseCount += tools
-				if tools == 0 && assistantText != "" {
-					lastAssistantText = assistantText
-				} else if tools > 0 {
-					// A turn that invokes a tool is intermediate even when it also
-					// contains narration. Do not use it as an empty-result fallback.
-					lastAssistantText = ""
+				turn := b.handleAssistant(msg, msgCh, usage)
+				toolUseCount += turn.toolUses
+				if !turn.understood {
+					unreadableAssistantCount++
 				}
-				// A text-less, tool-less assistant event (thinking-only, or a
-				// content block set we render nothing for) carries no answer and
-				// no intermediacy signal, so it must leave the fallback alone.
-				// Overwriting it with "" discarded an answer the model had
-				// already delivered. Matches qwen's handling.
+				lastAssistantText = turn.resolveFallback(lastAssistantText)
 			case "user":
 				if b.handleUser(msg, msgCh) {
 					sawAsyncLaunch = true
@@ -342,6 +335,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 			resultBytes:                len(finalResultText),
 			lastAssistantBytes:         len(lastAssistantText),
 			scannerError:               scanErr != nil,
+			unreadableAssistantCount:   unreadableAssistantCount,
 			anthropicBaseURLConfigured: strings.TrimSpace(b.cfg.Env["ANTHROPIC_BASE_URL"]) != "",
 		})
 
@@ -372,11 +366,14 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	return &Session{Messages: msgCh, Result: resCh}, nil
 }
 
-func (b *claudeBackend) handleAssistant(msg claudeSDKMessage, ch chan<- Message, usage map[string]TokenUsage) (string, int) {
+func (b *claudeBackend) handleAssistant(msg claudeSDKMessage, ch chan<- Message, usage map[string]TokenUsage) assistantTurn {
 	var content claudeMessageContent
 	if err := json.Unmarshal(msg.Message, &content); err != nil {
-		return "", 0
+		// Unreadable body: understood stays false so the caller drops any
+		// fallback rather than let an older turn stand in for this one.
+		return assistantTurn{}
 	}
+	turn := assistantTurn{understood: true}
 	var assistantText strings.Builder
 	toolUseCount := 0
 
@@ -413,9 +410,17 @@ func (b *claudeBackend) handleAssistant(msg claudeSDKMessage, ch chan<- Message,
 				CallID: block.ID,
 				Input:  input,
 			})
+		default:
+			// A block type we do not render may be carrying the model's answer
+			// in a shape we cannot read, so we must not claim this turn was
+			// silent. Recognising a new no-text block is a deliberate one-line
+			// addition here, not an accident of falling through.
+			turn.understood = false
 		}
 	}
-	return assistantText.String(), toolUseCount
+	turn.text = assistantText.String()
+	turn.toolUses = toolUseCount
+	return turn
 }
 
 func (b *claudeBackend) handleUser(msg claudeSDKMessage, ch chan<- Message) bool {

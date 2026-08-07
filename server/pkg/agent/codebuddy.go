@@ -187,6 +187,7 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 		invalidEventCount := 0
 		assistantEventCount := 0
 		toolUseCount := 0
+		unreadableAssistantCount := 0
 
 		// Close stdout when the context is cancelled so scanner.Scan() unblocks.
 		go func() {
@@ -213,18 +214,12 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 			switch msg.Type {
 			case "assistant":
 				assistantEventCount++
-				assistantText, tools := b.handleAssistant(msg, msgCh, usage)
-				toolUseCount += tools
-				if tools == 0 && assistantText != "" {
-					lastAssistantText = assistantText
-				} else if tools > 0 {
-					// A turn that invokes a tool is intermediate even when it also
-					// contains narration. Do not use it as an empty-result fallback.
-					lastAssistantText = ""
+				turn := b.handleAssistant(msg, msgCh, usage)
+				toolUseCount += turn.toolUses
+				if !turn.understood {
+					unreadableAssistantCount++
 				}
-				// A text-less, tool-less assistant event carries no answer and no
-				// intermediacy signal, so it must leave the fallback alone. Matches
-				// qwen's handling.
+				lastAssistantText = turn.resolveFallback(lastAssistantText)
 			case "user":
 				b.handleUser(msg, msgCh)
 			case "system":
@@ -304,6 +299,7 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 			resultBytes:                len(finalResultText),
 			lastAssistantBytes:         len(lastAssistantText),
 			scannerError:               scanErr != nil,
+			unreadableAssistantCount:   unreadableAssistantCount,
 			anthropicBaseURLConfigured: strings.TrimSpace(b.cfg.Env["ANTHROPIC_BASE_URL"]) != "",
 		})
 
@@ -332,11 +328,14 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 	return &Session{Messages: msgCh, Result: resCh}, nil
 }
 
-func (b *codebuddyBackend) handleAssistant(msg codebuddySDKMessage, ch chan<- Message, usage map[string]TokenUsage) (string, int) {
+func (b *codebuddyBackend) handleAssistant(msg codebuddySDKMessage, ch chan<- Message, usage map[string]TokenUsage) assistantTurn {
 	var content codebuddyMessageContent
 	if err := json.Unmarshal(msg.Message, &content); err != nil {
-		return "", 0
+		// Unreadable body: understood stays false so the caller drops any
+		// fallback rather than let an older turn stand in for this one.
+		return assistantTurn{}
 	}
+	turn := assistantTurn{understood: true}
 	var assistantText strings.Builder
 	toolUseCount := 0
 
@@ -373,9 +372,17 @@ func (b *codebuddyBackend) handleAssistant(msg codebuddySDKMessage, ch chan<- Me
 				CallID: block.ID,
 				Input:  input,
 			})
+		default:
+			// A block type we do not render may be carrying the model's answer
+			// in a shape we cannot read, so we must not claim this turn was
+			// silent. Recognising a new no-text block is a deliberate one-line
+			// addition here, not an accident of falling through.
+			turn.understood = false
 		}
 	}
-	return assistantText.String(), toolUseCount
+	turn.text = assistantText.String()
+	turn.toolUses = toolUseCount
+	return turn
 }
 
 func (b *codebuddyBackend) handleUser(msg codebuddySDKMessage, ch chan<- Message) {

@@ -362,7 +362,8 @@ func TestCodebuddyHandleAssistantText(t *testing.T) {
 		}),
 	}
 
-	output, tools := b.handleAssistant(msg, ch, make(map[string]TokenUsage))
+	turn := b.handleAssistant(msg, ch, make(map[string]TokenUsage))
+	output, tools := turn.text, turn.toolUses
 
 	if output != "codebuddy says hi" {
 		t.Fatalf("expected output 'codebuddy says hi', got %q", output)
