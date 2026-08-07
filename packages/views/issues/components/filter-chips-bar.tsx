@@ -444,7 +444,11 @@ function useFilterChips(
 function ChipSpan({ chip }: { chip: FilterChip }) {
   const { t } = useT("issues");
   return (
-    <span className="flex h-6 max-w-72 items-center gap-1.5 rounded-md bg-background pl-2 pr-1 text-caption shadow-xs">
+    // Keyed per dimension: the chip animates in once when its dimension
+    // first gains a value; value changes inside it re-render without
+    // re-animating. No exit animation — unmount presence isn't worth the
+    // machinery for a 150ms nicety.
+    <span className="flex h-6 max-w-72 items-center gap-1.5 rounded-md bg-background pl-2 pr-1 text-caption shadow-xs animate-in fade-in-0 zoom-in-95 duration-150">
       <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
         {chip.icon}
         <span>{chip.label}</span>
