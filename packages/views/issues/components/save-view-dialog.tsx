@@ -622,7 +622,7 @@ export function SaveViewDialog({
               ? t(($) => $.save_view.edit_title)
               : t(($) => $.save_view.title)}
           </DialogTitle>
-          <DialogDescription>{scopeHint}</DialogDescription>
+          <DialogDescription className="break-words">{scopeHint}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">

@@ -84,7 +84,7 @@ export function DeleteViewConfirm({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{t(($) => $.view_bar.delete_title)}</AlertDialogTitle>
-          <AlertDialogDescription>
+          <AlertDialogDescription className="break-words">
             {t(($) => $.view_bar.delete_description, { name: view?.name ?? "" })}
           </AlertDialogDescription>
         </AlertDialogHeader>

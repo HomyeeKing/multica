@@ -69,7 +69,7 @@ function SortableRow({
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
-        "flex items-center gap-2 rounded-md px-2 py-1.5",
+        "flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5",
         isDragging && "z-10 bg-accent opacity-80",
       )}
     >
@@ -207,7 +207,7 @@ export function ManageViewsDialog({
             </DialogTitle>
             <DialogDescription>{t(($) => $.view_bar.manage_hint)}</DialogDescription>
           </DialogHeader>
-          <div className="-mx-2">
+          <div className="-mx-2 min-w-0 overflow-hidden">
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
