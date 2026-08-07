@@ -296,7 +296,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         version: "0.4.21",
         date: "2026-08-07",
-        title: "WeCom bots, and a new Analytics page that separates spend from errors",
+        title: "WeCom bots, a new Analytics page, and leaner agent prompts",
         changes: [],
         features: [
           "Your agents can now live in WeCom — DM them or @-mention them in a group.",

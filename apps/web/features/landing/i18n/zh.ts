@@ -296,7 +296,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         version: "0.4.21",
         date: "2026-08-07",
-        title: "企业微信机器人，Analytics 把花费和报错分开看",
+        title: "企业微信机器人、全新 Analytics 页面、prompt 继续瘦身",
         changes: [],
         features: [
           "智能体可以入驻企业微信，私聊或在群里 @ 它就能用。",

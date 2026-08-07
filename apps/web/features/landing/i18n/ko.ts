@@ -271,7 +271,7 @@ export function createKoDict(allowSignup: boolean): LandingDict {
         {
           version: "0.4.21",
           date: "2026-08-07",
-          title: "WeCom 봇, 비용과 오류를 나눠 보는 Analytics",
+          title: "WeCom 봇, 새로운 Analytics 페이지, 프롬프트 추가 경량화",
           changes: [],
           features: [
             "에이전트를 WeCom에 둘 수 있어요. DM이나 그룹에서 @로 부르면 됩니다.",

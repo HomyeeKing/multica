@@ -272,7 +272,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
         {
           version: "0.4.21",
           date: "2026-08-07",
-          title: "WeCom ボット、費用とエラーを分けて見られる Analytics",
+          title: "WeCom ボット、新しい Analytics ページ、さらに軽量化したプロンプト",
           changes: [],
           features: [
             "エージェントを WeCom に置けます。DM でも、グループで @ でも使えます。",
