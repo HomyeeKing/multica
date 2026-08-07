@@ -72,7 +72,7 @@ function renderDropdown(models: RuntimeModel[] = []) {
 
 describe("ModelDropdown runtime default display", () => {
   it("keeps the runtime default visible even when live discovery has no models", () => {
-    renderDropdown();
+    const { onChange } = renderDropdown();
 
     expect(
       screen.getByText("Runtime default: deepseek-v4-pro"),
@@ -83,7 +83,14 @@ describe("ModelDropdown runtime default display", () => {
 
     expect(screen.getByText("Use runtime default")).toBeInTheDocument();
     expect(screen.getByText("deepseek-v4-pro · deepseek")).toBeInTheDocument();
+    expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
     expect(screen.queryByText("No models available.")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /deepseek-v4-flash/i }),
+    );
+
+    expect(onChange).toHaveBeenCalledWith("deepseek-v4-flash");
   });
 
   it("hides Pi no-model discovery noise from the model list", () => {
@@ -92,6 +99,7 @@ describe("ModelDropdown runtime default display", () => {
     fireEvent.click(screen.getByRole("button", { name: /Runtime default/i }));
 
     expect(screen.getByText("Use runtime default")).toBeInTheDocument();
+    expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
     expect(screen.queryByText("No/models")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("Search or type a model ID"), {

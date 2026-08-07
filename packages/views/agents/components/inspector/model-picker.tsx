@@ -75,12 +75,8 @@ export function ModelPicker({
   // reference; `?? []` would mint a fresh array on every render and
   // invalidate filters needlessly.
   const models = useMemo(
-    () =>
-      visibleRuntimeModels(
-        modelsQuery.data?.models ?? [],
-        runtime?.provider,
-      ),
-    [modelsQuery.data, runtime?.provider],
+    () => visibleRuntimeModels(modelsQuery.data?.models ?? [], runtime),
+    [modelsQuery.data, runtime],
   );
 
   const filtered = useMemo(() => {

@@ -5755,6 +5755,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if piConfigValid && strings.TrimSpace(agentEnvOverrides[piagent.APIKeyEnv]) == "" {
 		return TaskResult{}, fmt.Errorf("Pi runtime configuration requires %s in the agent environment", piagent.APIKeyEnv)
 	}
+	if piConfigValid && task.Agent != nil {
+		piConfig = applyPiAgentModelOverride(piConfig, task.Agent.Model, d.logger)
+	}
 	// Effective Codex CLI args the task will launch with, normalized through the
 	// same agent.NormalizeCodexLaunchArgs pipeline buildCodexArgs uses (shell
 	// unquoting + blocked-flag filtering), preserving its ExtraArgs

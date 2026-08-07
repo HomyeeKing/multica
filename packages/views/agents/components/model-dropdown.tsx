@@ -65,12 +65,8 @@ export function ModelDropdown({
   // Stable reference for the model list — `?? []` would mint a fresh
   // array each render and force every downstream useMemo to invalidate.
   const models = useMemo(
-    () =>
-      visibleRuntimeModels(
-        modelsQuery.data?.models ?? [],
-        runtime?.provider,
-      ),
-    [modelsQuery.data, runtime?.provider],
+    () => visibleRuntimeModels(modelsQuery.data?.models ?? [], runtime),
+    [modelsQuery.data, runtime],
   );
   const grouped = useMemo(() => groupByProvider(models), [models]);
 

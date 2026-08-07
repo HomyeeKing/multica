@@ -74,7 +74,7 @@ function renderPicker(models: RuntimeModel[] = []) {
 
 describe("ModelPicker runtime default display", () => {
   it("shows the Pi runtime default as the selected empty model", () => {
-    renderPicker();
+    const { onChange } = renderPicker();
 
     expect(
       screen.getByText("Runtime default: deepseek-v4-pro"),
@@ -85,7 +85,12 @@ describe("ModelPicker runtime default display", () => {
 
     expect(screen.getByText("Use runtime default")).toBeInTheDocument();
     expect(screen.getByText("deepseek-v4-pro · deepseek")).toBeInTheDocument();
+    expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
     expect(screen.queryByText("No models available")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("deepseek-v4-flash"));
+
+    expect(onChange).toHaveBeenCalledWith("deepseek-v4-flash");
   });
 
   it("hides Pi no-model discovery noise from the model list", () => {
@@ -94,6 +99,7 @@ describe("ModelPicker runtime default display", () => {
     fireEvent.click(screen.getByRole("button"));
 
     expect(screen.getByText("Use runtime default")).toBeInTheDocument();
+    expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
     expect(screen.queryByText("No/models")).not.toBeInTheDocument();
 
     fireEvent.change(

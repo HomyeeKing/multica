@@ -91,8 +91,18 @@ describe("PiModelConnectionCard", () => {
 
     const key = screen.getByLabelText("API key");
     expect(screen.getByLabelText("Model provider")).toHaveValue("deepseek");
-    expect(screen.getByLabelText("Model")).toHaveValue(
-      "deepseek-v4-flash",
+    expect(
+      screen.getByRole("listbox", { name: "Model" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: /deepseek-v4-flash/i }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Default")).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: /deepseek-v4-pro/i }),
+    ).toHaveAttribute("aria-selected", "false");
+    await user.click(
+      screen.getByRole("option", { name: /deepseek-v4-pro/i }),
     );
     expect(
       screen.getByRole("button", { name: "Save connection" }),
@@ -110,8 +120,42 @@ describe("PiModelConnectionCard", () => {
           provider: "deepseek",
           api: "openai-completions",
           base_url: "https://api.deepseek.com",
-          model: "deepseek-v4-flash",
+          model: "deepseek-v4-pro",
           api_key: "sk-deepseek",
+        },
+      },
+      expect.any(Object),
+    );
+  });
+
+  it("saves another provider preset with its official endpoint", async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(
+      screen.getByRole("button", { name: "Configure model" }),
+    );
+    await user.selectOptions(screen.getByLabelText("Model provider"), "xai");
+
+    expect(
+      screen.getByRole("option", { name: /grok-4\.5/i }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByText("grok-4.3")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("API key"), "xai-key");
+    await user.click(
+      screen.getByRole("button", { name: "Save connection" }),
+    );
+
+    expect(updateMutate).toHaveBeenCalledWith(
+      {
+        runtimeId: "runtime-1",
+        connection: {
+          provider: "xai",
+          api: "openai-completions",
+          base_url: "https://api.x.ai/v1",
+          model: "grok-4.5",
+          api_key: "xai-key",
         },
       },
       expect.any(Object),

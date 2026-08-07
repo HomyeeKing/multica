@@ -34,11 +34,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import { Badge } from "@multica/ui/components/ui/badge";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { useT } from "../../i18n";
+import {
+  PI_DEFAULT_PROVIDER_PRESET,
+  PI_PROVIDER_PRESETS,
+  findPiProviderPreset,
+  getPiProviderPreset,
+  type PiProviderPreset,
+  type PiProviderPresetId,
+} from "../model-presets";
 
-type ProviderPreset = "deepseek" | "custom";
+const CUSTOM_PROVIDER_PRESET = "custom";
+
+type ProviderPreset = PiProviderPresetId | typeof CUSTOM_PROVIDER_PRESET;
 
 type Draft = {
   preset: ProviderPreset;
@@ -49,33 +60,33 @@ type Draft = {
   apiKey: string;
 };
 
-const DEEPSEEK_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
+function presetToDraft(
+  preset: PiProviderPreset,
+  model: string | undefined,
+): Draft {
+  return {
+    preset: preset.id as PiProviderPresetId,
+    provider: preset.provider,
+    api: preset.api,
+    baseUrl: preset.baseUrl,
+    model: model && preset.models.includes(model) ? model : preset.defaultModel,
+    apiKey: "",
+  };
+}
 
 function configToDraft(runtime: AgentRuntime): Draft {
   const config = parsePiRuntimeConfig(runtime.default_model_config);
-  const isDeepSeek =
-    config.provider === "deepseek" &&
-    config.baseUrl?.replace(/\/+$/, "") === "https://api.deepseek.com";
-  const isKnownDeepSeekModel = DEEPSEEK_MODELS.includes(
-    config.model as (typeof DEEPSEEK_MODELS)[number],
-  );
+  if (Object.keys(config).length === 0) {
+    return presetToDraft(PI_DEFAULT_PROVIDER_PRESET, undefined);
+  }
 
-  if (
-    (isDeepSeek && isKnownDeepSeekModel) ||
-    Object.keys(config).length === 0
-  ) {
-    return {
-      preset: "deepseek",
-      provider: "deepseek",
-      api: "openai-completions",
-      baseUrl: "https://api.deepseek.com",
-      model: config.model ?? DEEPSEEK_MODELS[0],
-      apiKey: "",
-    };
+  const preset = findPiProviderPreset(config);
+  if (preset && config.model && preset.models.includes(config.model)) {
+    return presetToDraft(preset, config.model);
   }
 
   return {
-    preset: "custom",
+    preset: CUSTOM_PROVIDER_PRESET,
     provider: config.provider ?? "",
     api: config.api ?? "openai-responses",
     baseUrl: config.baseUrl ?? "",
@@ -134,24 +145,29 @@ export function PiModelConnectionDialog({
     !validationError &&
     (!needsKey || draft.apiKey.trim().length > 0) &&
     !busy;
+  const activePreset =
+    draft.preset === CUSTOM_PROVIDER_PRESET
+      ? undefined
+      : getPiProviderPreset(draft.preset);
 
   const selectPreset = (preset: ProviderPreset) => {
-    if (preset === "deepseek") {
-      setDraft((current) => ({
-        ...current,
-        preset,
-        provider: "deepseek",
-        api: "openai-completions",
-        baseUrl: "https://api.deepseek.com",
-        model: DEEPSEEK_MODELS.includes(
-          current.model as (typeof DEEPSEEK_MODELS)[number],
-        )
-          ? current.model
-          : DEEPSEEK_MODELS[0],
-      }));
+    if (preset === CUSTOM_PROVIDER_PRESET) {
+      setDraft((current) => ({ ...current, preset }));
       return;
     }
-    setDraft((current) => ({ ...current, preset }));
+    const nextPreset = getPiProviderPreset(preset);
+    if (nextPreset) {
+      setDraft((current) => ({
+        ...current,
+        preset: nextPreset.id as PiProviderPresetId,
+        provider: nextPreset.provider,
+        api: nextPreset.api,
+        baseUrl: nextPreset.baseUrl,
+        model: nextPreset.models.includes(current.model)
+          ? current.model
+          : nextPreset.defaultModel,
+      }));
+    }
   };
 
   const save = () => {
@@ -233,37 +249,64 @@ export function PiModelConnectionDialog({
                 }
                 className="h-9 w-full rounded-md border border-input bg-background px-3 text-body"
               >
-                <option value="deepseek">
-                  {t(($) => $.detail.model_connection.deepseek_provider)}
-                </option>
-                <option value="custom">
+                {PI_PROVIDER_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+                <option value={CUSTOM_PROVIDER_PRESET}>
                   {t(($) => $.detail.model_connection.custom_provider)}
                 </option>
               </select>
             </div>
 
-            {draft.preset === "deepseek" ? (
+            {activePreset ? (
               <div className="space-y-1.5">
-                <Label htmlFor="pi-connection-model">
+                <Label id="pi-connection-model-label">
                   {t(($) => $.detail.model_connection.model_label)}
                 </Label>
-                <select
-                  id="pi-connection-model"
-                  value={draft.model}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      model: event.target.value,
-                    }))
-                  }
-                  className="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-caption"
+                <div
+                  role="listbox"
+                  aria-labelledby="pi-connection-model-label"
+                  className="grid gap-2"
                 >
-                  {DEEPSEEK_MODELS.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
+                  {activePreset.models.map((model) => {
+                    const selected = draft.model === model;
+                    return (
+                      <button
+                        key={model}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        onClick={() =>
+                          setDraft((current) => ({
+                            ...current,
+                            model,
+                          }))
+                        }
+                        className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left transition-colors ${
+                          selected
+                            ? "border-primary bg-primary/5 text-foreground"
+                            : "border-input bg-background text-foreground hover:bg-muted"
+                        }`}
+                      >
+                        <span className="min-w-0 truncate font-mono text-caption font-medium">
+                          {model}
+                        </span>
+                        {selected && (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 border-primary/30 bg-background text-primary"
+                          >
+                            {t(
+                              ($) => $.detail.model_connection.default_badge,
+                            )}
+                          </Badge>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2">

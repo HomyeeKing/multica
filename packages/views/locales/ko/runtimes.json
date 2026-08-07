@@ -137,6 +137,7 @@
       "api_label": "API 형식",
       "base_url_label": "Base URL",
       "model_label": "모델",
+      "default_badge": "기본값",
       "api_key_label": "API 키",
       "api_key_placeholder": "API 키 붙여넣기",
       "api_key_saved": "저장됨 — 비워 두면 유지",

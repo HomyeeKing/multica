@@ -137,6 +137,7 @@
       "api_label": "API 形式",
       "base_url_label": "Base URL",
       "model_label": "モデル",
+      "default_badge": "デフォルト",
       "api_key_label": "API キー",
       "api_key_placeholder": "API キーを貼り付け",
       "api_key_saved": "保存済み — 空欄のまま保持",

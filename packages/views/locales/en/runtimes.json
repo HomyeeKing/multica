@@ -142,6 +142,7 @@
       "api_label": "API format",
       "base_url_label": "Base URL",
       "model_label": "Model",
+      "default_badge": "Default",
       "api_key_label": "API key",
       "api_key_placeholder": "Paste the API key",
       "api_key_saved": "Saved — leave blank to keep it",

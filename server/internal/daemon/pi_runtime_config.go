@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"log/slog"
+	"strings"
 
 	"github.com/multica-ai/multica/server/internal/piagent"
 )
@@ -18,4 +19,30 @@ func decodePiRuntimeConfig(raw json.RawMessage, logger *slog.Logger) (piagent.Co
 		return piagent.Config{}, false
 	}
 	return cfg, configured
+}
+
+func applyPiAgentModelOverride(cfg piagent.Config, modelOverride string, logger *slog.Logger) piagent.Config {
+	modelOverride = strings.TrimSpace(modelOverride)
+	if modelOverride == "" {
+		return cfg
+	}
+	if provider, model, ok := strings.Cut(modelOverride, "/"); ok {
+		provider = strings.TrimSpace(provider)
+		model = strings.TrimSpace(model)
+		if provider == "" || model == "" {
+			return cfg
+		}
+		if !strings.EqualFold(provider, cfg.Provider) {
+			logger.Warn(
+				"pi runtime_config: model override provider differs from runtime provider; using runtime default",
+				"runtime_provider", cfg.Provider,
+				"model_provider", provider,
+			)
+			return cfg
+		}
+		cfg.Model = model
+		return cfg
+	}
+	cfg.Model = modelOverride
+	return cfg
 }
