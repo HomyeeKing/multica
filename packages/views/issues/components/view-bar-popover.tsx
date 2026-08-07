@@ -177,7 +177,7 @@ function SortablePanelRow({
                 variant="ghost"
                 size="icon-sm"
                 aria-label={t(($) => $.view_bar.row_menu)}
-                className="text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover/view-row:opacity-100"
+                className="text-muted-foreground"
               >
                 <MoreHorizontal className="size-3.5" />
               </Button>
