@@ -232,6 +232,16 @@ type Config struct {
 	RuntimeID      string
 	DaemonVersion  string
 	CodexVersion   string
+	// BuiltinRuntime reports that ExecutablePath is the provider's own
+	// discovered binary rather than a custom runtime profile's command. A
+	// custom profile keeps its protocol family as the provider, so the
+	// provider name cannot distinguish the two: `protocol_family: hermes`
+	// with `command_name: jcode` arrives as "hermes" while being an
+	// unrelated implementation. Backends use this to scope
+	// compatibility exceptions that were verified against a specific
+	// vendor's binary; it defaults to false so an unset caller fails
+	// closed onto standard behavior.
+	BuiltinRuntime bool
 }
 
 // New creates a Backend for the given agent type.
