@@ -3079,30 +3079,27 @@ func refreshUntouchedNullableIssueParams(params *db.UpdateIssueParams, current d
 	}
 }
 
-func (h *Handler) updateIssueWithDescriptionMerge(ctx context.Context, workspaceID pgtype.UUID, params db.UpdateIssueParams, rawFields map[string]json.RawMessage, base *string) (db.Issue, db.Issue, error) {
-	if h.TxStarter == nil {
-		return db.Issue{}, db.Issue{}, errors.New("issue description update requires transaction starter")
-	}
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return db.Issue{}, db.Issue{}, fmt.Errorf("begin issue description update: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	qtx := h.Queries.WithTx(tx)
-	current, err := qtx.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
+// mergeIssueDescriptionParams resolves the channel-media merge for a description
+// write against the row locked in the CALLER's transaction, mutating params in
+// place. Split out of updateIssueWithDescriptionMerge so the status-write path
+// can perform the same merge inside its own status-lock transaction: a request
+// that changes status AND description must not skip the merge (it would drop
+// channel media that landed after the editor's base) and must not take two
+// separate transactions. Returns the locked pre-write row.
+func mergeIssueDescriptionParams(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, params *db.UpdateIssueParams, rawFields map[string]json.RawMessage, base *string) (db.Issue, error) {
+	current, err := q.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
 		ID:          params.ID,
 		WorkspaceID: workspaceID,
 	})
 	if err != nil {
-		return db.Issue{}, db.Issue{}, fmt.Errorf("lock issue description: %w", err)
+		return db.Issue{}, fmt.Errorf("lock issue description: %w", err)
 	}
-	attachments, err := qtx.ListAttachmentsByIssue(ctx, db.ListAttachmentsByIssueParams{
+	attachments, err := q.ListAttachmentsByIssue(ctx, db.ListAttachmentsByIssueParams{
 		IssueID:     current.ID,
 		WorkspaceID: current.WorkspaceID,
 	})
 	if err != nil {
-		return db.Issue{}, db.Issue{}, fmt.Errorf("list issue attachments for description merge: %w", err)
+		return db.Issue{}, fmt.Errorf("list issue attachments for description merge: %w", err)
 	}
 
 	currentDescription := ""
@@ -3117,7 +3114,25 @@ func (h *Handler) updateIssueWithDescriptionMerge(ctx context.Context, workspace
 		String: mergeIssueChannelMediaDescription(currentDescription, incomingDescription, base, attachments),
 		Valid:  true,
 	}
-	refreshUntouchedNullableIssueParams(&params, current, rawFields)
+	refreshUntouchedNullableIssueParams(params, current, rawFields)
+	return current, nil
+}
+
+func (h *Handler) updateIssueWithDescriptionMerge(ctx context.Context, workspaceID pgtype.UUID, params db.UpdateIssueParams, rawFields map[string]json.RawMessage, base *string) (db.Issue, db.Issue, error) {
+	if h.TxStarter == nil {
+		return db.Issue{}, db.Issue{}, errors.New("issue description update requires transaction starter")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.Issue{}, db.Issue{}, fmt.Errorf("begin issue description update: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := h.Queries.WithTx(tx)
+	current, err := mergeIssueDescriptionParams(ctx, qtx, workspaceID, &params, rawFields, base)
+	if err != nil {
+		return db.Issue{}, db.Issue{}, err
+	}
 
 	issue, err := qtx.UpdateIssue(ctx, params)
 	if err != nil {
@@ -3323,7 +3338,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		// Resolve the catalog status and write it in ONE transaction under the
 		// status-write lock, so the resolve+write commits atomically against a
 		// concurrent archive-with-migration (MUL-4809 §5.5). params carries every
-		// other field too, so the whole update lands in that tx.
+		// other field too, so the whole update lands in that tx — including the
+		// channel-media description merge when this request also edits the
+		// description, which must NOT be skipped just because the status changed.
 		lockErr := h.withIssueStatusLock(r, prevIssue.WorkspaceID, func(q *db.Queries) error {
 			row, token, seeded, rerr := issuestatus.ResolveWriteInput(r.Context(), q, prevIssue.WorkspaceID, req.Status, statusIDInput)
 			if rerr != nil {
@@ -3332,6 +3349,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			params.Status = pgtype.Text{String: token, Valid: true}
 			if seeded {
 				params.StatusID = row.ID
+			}
+			if req.Description != nil {
+				lockedPrev, merr := mergeIssueDescriptionParams(r.Context(), q, prevIssue.WorkspaceID, &params, rawFields, req.DescriptionBase)
+				if merr != nil {
+					return merr
+				}
+				prevIssue = lockedPrev
 			}
 			var werr error
 			issue, werr = q.UpdateIssue(r.Context(), params)
@@ -3351,10 +3375,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if req.Description != nil {
-		// Description writes go through the channel-media merge so media that
-		// landed after the editor's base is preserved. A status change never
-		// travels with a description edit from our clients, so the two write
-		// paths stay disjoint.
+		// Description-only write: same channel-media merge, in its own tx. A
+		// combined status+description update is handled by the status branch
+		// above, which runs this merge inside the status-lock transaction.
 		var lockedPrev db.Issue
 		issue, lockedPrev, err = h.updateIssueWithDescriptionMerge(
 			r.Context(), prevIssue.WorkspaceID, params, rawFields, req.DescriptionBase,
@@ -3995,6 +4018,17 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				params.Status = pgtype.Text{String: token, Valid: true}
 				if seeded {
 					params.StatusID = row.ID
+				}
+				if req.Updates.Description != nil {
+					// Same composition as single update: a batch that sets status AND
+					// description must still merge channel media. One batch-level base
+					// cannot describe multiple documents, so preserve conservatively
+					// (nil base), matching the description-only batch path below.
+					lockedPrev, merr := mergeIssueDescriptionParams(r.Context(), q, wsUUID, &params, rawUpdates, nil)
+					if merr != nil {
+						return merr
+					}
+					prevIssue = lockedPrev
 				}
 				var werr error
 				issue, werr = q.UpdateIssue(r.Context(), params)
