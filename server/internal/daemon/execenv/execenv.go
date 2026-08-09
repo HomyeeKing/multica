@@ -409,6 +409,7 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 			OpenclawBin: params.OpenclawBin,
 			McpConfig:   params.McpConfig,
 			Gateway:     params.OpenclawGateway,
+			Logger:      logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("execenv: prepare openclaw config: %w", err)
@@ -651,6 +652,7 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 			OpenclawBin: params.OpenclawBin,
 			McpConfig:   params.McpConfig,
 			Gateway:     params.OpenclawGateway,
+			Logger:      logger,
 		})
 		if err != nil {
 			logger.Warn("execenv: refresh openclaw config failed", "error", err)
