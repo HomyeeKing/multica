@@ -515,40 +515,46 @@ func TestTaskMulticaEnvironmentIncludesPrivateConfigRoot(t *testing.T) {
 	t.Parallel()
 
 	const (
-		fakeToken = "mat_task_environment_sentinel"
-		taskRoot  = "/task/private-multica-config"
+		fakeToken      = "mat_task_environment_sentinel"
+		taskRoot       = "/task/private-multica-config"
+		workspacesRoot = "/daemon/multica_workspaces_staging"
 	)
 	task := Task{
 		ID:          "task-test",
 		AgentID:     "agent-test",
 		WorkspaceID: "workspace-test",
 	}
-	env := taskMulticaEnvironment(task, "agent-name", fakeToken, taskRoot, "https://task.example", 19514, 3, "/task/tmp")
+	env := taskMulticaEnvironment(task, "agent-name", fakeToken, taskRoot, workspacesRoot, "https://task.example", 19514, 3, "/task/tmp")
 
 	want := map[string]string{
-		"MULTICA_TOKEN":            fakeToken,
-		"MULTICA_TASK_CONFIG_ROOT": taskRoot,
-		"MULTICA_SERVER_URL":       "https://task.example",
-		"MULTICA_DAEMON_PORT":      "19514",
-		"MULTICA_WORKSPACE_ID":     "workspace-test",
-		"MULTICA_AGENT_NAME":       "agent-name",
-		"MULTICA_AGENT_ID":         "agent-test",
-		"MULTICA_TASK_ID":          "task-test",
-		"MULTICA_TASK_SLOT":        "3",
-		"TMPDIR":                   "/task/tmp",
-		"TMP":                      "/task/tmp",
-		"TEMP":                     "/task/tmp",
+		"MULTICA_TOKEN":                fakeToken,
+		"MULTICA_TASK_CONFIG_ROOT":     taskRoot,
+		"MULTICA_TASK_WORKSPACES_ROOT": workspacesRoot,
+		"MULTICA_SERVER_URL":           "https://task.example",
+		"MULTICA_DAEMON_PORT":          "19514",
+		"MULTICA_WORKSPACE_ID":         "workspace-test",
+		"MULTICA_AGENT_NAME":           "agent-name",
+		"MULTICA_AGENT_ID":             "agent-test",
+		"MULTICA_TASK_ID":              "task-test",
+		"MULTICA_TASK_SLOT":            "3",
+		"TMPDIR":                       "/task/tmp",
+		"TMP":                          "/task/tmp",
+		"TEMP":                         "/task/tmp",
 	}
 	if !maps.Equal(env, want) {
 		t.Fatalf("taskMulticaEnvironment() = %#v, want %#v", env, want)
 	}
 
 	layerCustomEnvAndHermesHome(env, map[string]string{
-		"MULTICA_TASK_CONFIG_ROOT": "/owner/config",
-		"MULTICA_TOKEN":            "mul_owner_sentinel",
+		"MULTICA_TASK_CONFIG_ROOT":     "/owner/config",
+		"MULTICA_TASK_WORKSPACES_ROOT": "/owner/multica_workspaces",
+		"MULTICA_TOKEN":                "mul_owner_sentinel",
 	}, "", nil)
 	if env["MULTICA_TASK_CONFIG_ROOT"] != taskRoot {
 		t.Fatalf("custom env replaced task config root: %q", env["MULTICA_TASK_CONFIG_ROOT"])
+	}
+	if env[TaskWorkspacesRootEnv] != workspacesRoot {
+		t.Fatalf("custom env replaced task workspaces root: %q", env[TaskWorkspacesRootEnv])
 	}
 	if env["MULTICA_TOKEN"] != fakeToken {
 		t.Fatal("custom env replaced task-scoped token")

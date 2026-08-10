@@ -541,12 +541,20 @@ func NormalizeServerBaseURL(raw string) (string, error) {
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
+// TaskWorkspacesRootEnv carries the workspaces root of the daemon that owns a
+// managed task into that task's environment. Task-mode `daemon disk-usage`
+// reads this and nothing else: ResolveWorkspacesRoot derives its default from
+// $HOME and the --profile name, so a task hosted by a named-profile daemon
+// would otherwise scan the default root and silently report the wrong tree.
+const TaskWorkspacesRootEnv = "MULTICA_TASK_WORKSPACES_ROOT"
+
 // ResolveWorkspacesRoot returns the absolute path that the daemon and CLI
 // should treat as the workspaces root. Resolution order: explicit override >
 // MULTICA_WORKSPACES_ROOT env > default ($HOME/multica_workspaces, or
 // $HOME/multica_workspaces_<profile> for a named profile). Read-only callers
 // (e.g. `multica daemon disk-usage`) use this directly so they pick the same
-// directory the running daemon would have picked.
+// directory the running daemon would have picked. Inside a managed task use
+// TaskWorkspacesRootEnv instead — see resolveDiskUsageRoot.
 func ResolveWorkspacesRoot(profile, override string) (string, error) {
 	root := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACES_ROOT"))
 	if override != "" {
