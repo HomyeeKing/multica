@@ -85,10 +85,12 @@ export interface ViewBarBuiltin {
 
 /** Width shared by every tab: fits short names, truncates long ones. */
 const TAB_MAX_W = "max-w-40";
-/** Reserved px beside the tabs: the [⧉] menu and the always-present list
- *  trigger; the promoted active tab is the wide shape. */
-const RESERVE_BASE = 36 + 32;
-const RESERVE_PROMOTED = 36 + 200;
+/** Reserved px beside the tabs, by what actually renders there: the [⧉]
+ *  menu is permanent; the "more" trigger exists only while something is
+ *  overflowed; the promoted active tab is the wide shape. */
+const RESERVE_MENU = 36;
+const RESERVE_MORE = RESERVE_MENU + 32;
+const RESERVE_PROMOTED = RESERVE_MENU + 200;
 
 /** One bar tab: sortable in place; suppresses the click that ends a drag. */
 function SortableBarTab({
@@ -272,23 +274,33 @@ export function ViewBar({
 
   // --- single-row fit -----------------------------------------------------
   // The reserve feeds back into the fit, but only ever grows when items
-  // fall out ("more" trigger, then the promoted active tab), which shrinks
-  // the fit further and keeps them out — the settle is monotonic.
+  // fall out (the "more" trigger appears, then the promoted active tab
+  // widens it), which shrinks the fit further and keeps them out — the
+  // settle is monotonic in both directions.
   const activeBarId = activeView ? `view:${activeView.id}` : null;
-  const [promotedTier, setPromotedTier] = useState(false);
+  const [reserveTier, setReserveTier] = useState<"menu" | "more" | "promoted">(
+    "menu",
+  );
   const { containerRef, measureRef, fitCount } = useSingleRowFit({
     count: visible.length,
     gap: 4,
-    reserve: promotedTier ? RESERVE_PROMOTED : RESERVE_BASE,
+    reserve:
+      reserveTier === "promoted"
+        ? RESERVE_PROMOTED
+        : reserveTier === "more"
+          ? RESERVE_MORE
+          : RESERVE_MENU,
   });
   const fitting = visible.slice(0, fitCount);
   const overflowed = visible.slice(fitCount);
   const activeOverflowed =
     !!activeBarId && overflowed.some((item) => item.barItemId === activeBarId);
   useEffect(() => {
-    setPromotedTier(activeOverflowed);
-  }, [activeOverflowed]);
-  const promoted = promotedTier && activeOverflowed;
+    setReserveTier(
+      activeOverflowed ? "promoted" : overflowed.length > 0 ? "more" : "menu",
+    );
+  }, [activeOverflowed, overflowed.length]);
+  const promoted = reserveTier === "promoted" && activeOverflowed;
 
   const savePrefs = (next: { hidden: string[]; order: string[] }) => {
     // A drag can land before the views list has loaded; pruning against an
@@ -473,9 +485,12 @@ export function ViewBar({
         </SortableContext>
       </DndContext>
 
-      {/* The full list — always reachable. Reordering here decides what
-          fits on the bar; the open view becomes the trigger when it
-          overflows so it never disappears. */}
+      {/* "More" is an overflow indicator: it renders only while something
+          is actually collapsed. Reordering in its panel decides what fits
+          on the bar; the open view becomes the trigger when it overflows
+          so it never disappears. With nothing overflowed, reorder lives on
+          the bar itself and management on the [⧉] menu. */}
+      {overflowed.length > 0 && (
       <Popover open={moreOpen} onOpenChange={setMoreOpen}>
         <PopoverTrigger
           render={
@@ -527,6 +542,7 @@ export function ViewBar({
           />
         </PopoverContent>
       </Popover>
+      )}
 
       <DropdownMenu>
         <Tooltip>
