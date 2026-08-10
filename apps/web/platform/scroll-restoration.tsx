@@ -29,6 +29,17 @@ import {
  */
 const savedOffsets = new Map<string, { top: number; height: number }>();
 
+/**
+ * Keys recently served through `adapter.get` are write-suppressed briefly:
+ * the restoring container assigns `scrollTop` at attach time, and if its
+ * content height isn't final yet the browser clamps the assignment and fires
+ * a scroll event — without suppression that clamped value (or a clamp to 0)
+ * would overwrite the very memento being restored. A real user scroll within
+ * the window is lost, which is the cheap side of the trade.
+ */
+const suppressedUntil = new Map<string, number>();
+const RESTORE_SUPPRESS_MS = 1000;
+
 function mementoKey(pathname: string, containerKey: string): string {
   return `${pathname}::${containerKey}`;
 }
@@ -45,6 +56,11 @@ export function WebScrollRestorationProvider({
       const raw = el.getAttribute("data-tab-scroll-root");
       if (raw === null) return;
       const key = mementoKey(window.location.pathname, raw || "main");
+      const suppressed = suppressedUntil.get(key);
+      if (suppressed !== undefined) {
+        if (performance.now() < suppressed) return;
+        suppressedUntil.delete(key);
+      }
       if (el.scrollTop <= 0) {
         // Back at the top is the default state — a stale offset would
         // otherwise resurrect on the next visit.
@@ -66,9 +82,14 @@ export function WebScrollRestorationProvider({
   const adapter = useMemo<ScrollRestorationAdapter>(
     () => ({
       get(containerKey) {
-        return savedOffsets.get(
-          mementoKey(window.location.pathname, containerKey),
-        );
+        const key = mementoKey(window.location.pathname, containerKey);
+        const saved = savedOffsets.get(key);
+        if (saved) {
+          // The caller is about to restore this offset — shield the memento
+          // from the clamped scroll events the restore itself can produce.
+          suppressedUntil.set(key, performance.now() + RESTORE_SUPPRESS_MS);
+        }
+        return saved;
       },
     }),
     [],

@@ -58,6 +58,36 @@ describe("WebScrollRestorationProvider", () => {
     expect(screen.getByTestId("restored").textContent).toBe("none");
   });
 
+  it("shields a just-served memento from the clamped scroll events a restore produces", () => {
+    const view = render(
+      <WebScrollRestorationProvider>
+        <div data-tab-scroll-root="shielded" data-testid="container" />
+        <ScrollProbe containerKey="shielded" />
+      </WebScrollRestorationProvider>,
+    );
+
+    scrollContainer(screen.getByTestId("container"), 480);
+
+    // Remount serves 480 (and arms the write shield) …
+    view.rerender(
+      <WebScrollRestorationProvider>
+        <div data-tab-scroll-root="shielded" data-testid="container" />
+        <ScrollProbe containerKey="shielded" />
+      </WebScrollRestorationProvider>,
+    );
+    expect(screen.getByTestId("restored").textContent).toBe("480");
+
+    // … so the browser clamping the restore assignment (content not yet at
+    // full height → scrollTop lands at 100) must not overwrite the memento.
+    scrollContainer(screen.getByTestId("container"), 100);
+    view.rerender(
+      <WebScrollRestorationProvider>
+        <ScrollProbe containerKey="shielded" />
+      </WebScrollRestorationProvider>,
+    );
+    expect(screen.getByTestId("restored").textContent).toBe("480");
+  });
+
   it("ignores scrolls from unmarked elements", () => {
     render(
       <WebScrollRestorationProvider>

@@ -28,7 +28,7 @@ import { Switch } from "@multica/ui/components/ui/switch";
 import { api, ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
-import { AppLink } from "../navigation";
+import { AppLink, resolveClickIntent } from "../navigation";
 import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import {
@@ -534,8 +534,12 @@ export function AgentCreatePanel({
   // Field visibility lives in Settings → Issue. Persist the prompt draft
   // before leaving so what the user typed survives the round-trip, then
   // close — the dialog would otherwise linger over the settings page.
-  const openFieldSettings = () => {
+  const openFieldSettings = (e: React.MouseEvent) => {
+    // Persist the draft either way, but only an in-place navigation closes
+    // the dialog — a modifier click opens Settings in another tab and the
+    // modal stays put.
     setAgent({ prompt: editorRef.current?.getMarkdown() ?? "" });
+    if (resolveClickIntent(e) !== "push") return;
     onClose();
   };
 

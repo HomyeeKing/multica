@@ -622,7 +622,14 @@ function DataTableBody<TData>({
         key={row.id}
         {...measured}
         data-state={row.getIsSelected() && "selected"}
-        onClick={onRowClick ? (e) => onRowClick(row, e) : undefined}
+        onClick={
+          onRowClick
+            ? (e) => {
+                if (e.defaultPrevented) return;
+                onRowClick(row, e);
+              }
+            : undefined
+        }
         // Middle click never produces a `click` event; forward it through the
         // same callback (button === 1 only — button 2 is the context menu).
         onAuxClick={

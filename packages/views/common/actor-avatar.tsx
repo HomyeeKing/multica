@@ -18,7 +18,7 @@ import { SquadProfileCard } from "../squads/components/squad-profile-card";
 import { availabilityConfig } from "../agents/presence";
 import {
   resolveClickIntent,
-  useNavigation,
+  useIntentNavigate,
   type LinkClickIntent,
 } from "../navigation";
 
@@ -164,29 +164,16 @@ function ActorAvatarProfileLink({
   href: string;
   children: React.ReactNode;
 }) {
-  const { push, openInNewTab, getShareableUrl } = useNavigation();
+  // Web note: the trigger is a `<span role="link">`, not an anchor, so there
+  // is no native modifier-click behaviour to fall back to — useIntentNavigate
+  // opens the browser tab itself rather than letting the click navigate in
+  // place.
+  const intentNavigate = useIntentNavigate();
 
   const insideControl = (event: React.SyntheticEvent) =>
     !!event.currentTarget.parentElement?.closest(PROFILE_LINK_CONTROL_SELECTOR);
 
-  const open = (intent: LinkClickIntent) => {
-    if (intent === "push") {
-      push(href);
-      return;
-    }
-    if (openInNewTab) {
-      if (intent === "foreground-tab") {
-        openInNewTab(href, undefined, { activate: true });
-      } else {
-        openInNewTab(href);
-      }
-      return;
-    }
-    // Web: the trigger is a `<span role="link">`, not an anchor, so there is
-    // no native modifier-click behaviour to fall back to — open the browser
-    // tab here rather than letting the click navigate in place.
-    window.open(getShareableUrl(href), "_blank", "noopener,noreferrer");
-  };
+  const open = (intent: LinkClickIntent) => intentNavigate(href, intent);
 
   const navigate = (event: React.MouseEvent | React.KeyboardEvent) => {
     if (insideControl(event)) return;

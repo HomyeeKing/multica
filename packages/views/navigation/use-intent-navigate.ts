@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 import type { LinkClickIntent } from "./click-intent";
-import { useOptionalNavigation } from "./context";
+import { useNavigation } from "./context";
 
 /**
  * Imperative sibling of AppLink / useRowLink for surfaces that receive the
@@ -14,16 +14,12 @@ import { useOptionalNavigation } from "./context";
  * `openInNewTab` (background or foreground); web falls back to `window.open`
  * on the shareable URL — always a foreground browser tab, since JS cannot
  * open a background one.
- *
- * Outside a NavigationProvider (bare component mounts in tests) the returned
- * function is inert.
  */
 export function useIntentNavigate() {
-  const navigation = useOptionalNavigation();
+  const navigation = useNavigation();
 
   return useCallback(
     (href: string, intent: LinkClickIntent, newTabTitle?: string) => {
-      if (!navigation) return;
       const { push, openInNewTab, getShareableUrl } = navigation;
       if (intent === "push") {
         push(href);

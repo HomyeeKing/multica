@@ -36,7 +36,7 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useT } from "../../i18n";
-import { AppLink } from "../../navigation";
+import { AppLink, useIntentNavigate } from "../../navigation";
 
 interface AgentRowActionsProps {
   agent: Agent;
@@ -72,6 +72,7 @@ export function AgentRowActions({
   const { t } = useT("agents");
   const { t: tCommon } = useT("common");
   const paths = useWorkspacePaths();
+  const intentNavigate = useIntentNavigate();
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
 
@@ -148,13 +149,17 @@ export function AgentRowActions({
           }
         />
         <DropdownMenuContent align="end" className="w-auto">
+          {/* Same shape as every other entity row menu: an explicit CTA is a
+              foreground open executed through the adapter (an anchor-based
+              item would depend on native activation surviving the menu
+              closing under it). */}
           <DropdownMenuItem
-            render={
-              <AppLink
-                href={paths.agentDetail(agent.id)}
-                newTabTitle={agent.name}
-                target="_blank"
-              />
+            onClick={() =>
+              intentNavigate(
+                paths.agentDetail(agent.id),
+                "foreground-tab",
+                agent.name,
+              )
             }
           >
             <ExternalLink className="h-3.5 w-3.5" />

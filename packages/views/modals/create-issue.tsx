@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AppLink, useNavigation } from "../navigation";
+import { AppLink, resolveClickIntent, useNavigation } from "../navigation";
 import {
   AlertTriangle,
   ArrowDown,
@@ -1182,7 +1182,13 @@ export function ManualCreatePanel({
                     render={
                       <AppLink
                         href={`${p.settings()}?tab=issue`}
-                        onClick={onClose}
+                        onClick={(e) => {
+                          // A modifier click opens Settings in another tab —
+                          // the modal (and the draft in it) stays put. Only
+                          // an in-place navigation closes it.
+                          if (resolveClickIntent(e) !== "push") return;
+                          onClose();
+                        }}
                       />
                     }
                   >
