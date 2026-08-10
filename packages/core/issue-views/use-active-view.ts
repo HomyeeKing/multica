@@ -35,7 +35,14 @@ export function useActiveIssueView(
   const activeView = activeViewId
     ? (views.find((v) => v.id === activeViewId) ?? null)
     : null;
-  const missing = !!activeViewId && listQuery.isSuccess && !activeView;
+  // "Missing" must never fire off a STALE list: right after a create the
+  // active id is set before the invalidated list lands, and treating that
+  // gap as "view deleted" bounces the surface back to the default tab.
+  const missing =
+    !!activeViewId &&
+    listQuery.isSuccess &&
+    !listQuery.isFetching &&
+    !activeView;
 
   const setActive = useCallback(
     (viewId: string | null) => {
