@@ -14,10 +14,11 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
  * never depends on what is currently mounted for real — no feedback
  * loop between measurement and rendering.
  *
- * Rules:
- * - If everything fits with no trigger at all, `fitCount` = item count.
- * - Otherwise the longest prefix that fits alongside `reserve` px of
- *   trigger wins.
+ * Rule: the longest prefix that fits alongside `reserve` px of trailing
+ * chrome wins. `reserve` must cover everything that is ALWAYS rendered
+ * after the items (triggers, menus) — it is subtracted even when every
+ * item fits, otherwise a row that exactly fits its items clips the
+ * chrome off the end.
  *
  * Remeasures on container resize (ResizeObserver) and after every
  * commit (labels/items change the mirror); state only updates when the
@@ -48,23 +49,13 @@ export function useSingleRowFit({
       (child) => (child as HTMLElement).offsetWidth,
     );
 
-    let total = 0;
+    let used = 0;
+    let next = 0;
     for (let i = 0; i < widths.length; i++) {
-      total += widths[i]! + (i > 0 ? gap : 0);
-    }
-    let next: number;
-    if (total <= available) {
-      next = widths.length;
-    } else {
-      let used = 0;
-      let fit = 0;
-      for (let i = 0; i < widths.length; i++) {
-        const withItem = used + (i > 0 ? gap : 0) + widths[i]!;
-        if (withItem + (fit > 0 ? gap : 0) + reserve > available) break;
-        used = withItem;
-        fit = i + 1;
-      }
-      next = fit;
+      const withItem = used + (i > 0 ? gap : 0) + widths[i]!;
+      if (withItem + gap + reserve > available) break;
+      used = withItem;
+      next = i + 1;
     }
     setFitCount((current) => (current === next ? current : next));
   }, [gap, reserve]);
