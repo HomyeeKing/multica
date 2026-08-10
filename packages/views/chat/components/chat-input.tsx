@@ -27,6 +27,7 @@ import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
 import type { MentionItem } from "../../editor/extensions/mention-suggestion";
 import type { Attachment, Project } from "@multica/core/types";
 import { ProjectPicker } from "../../projects/components/project-picker";
+import { ClearablePillButton } from "../../common/pill-button";
 import { useT } from "../../i18n";
 
 const logger = createLogger("chat.ui");
@@ -569,6 +570,10 @@ export function ChatInput({
         // spilling out of it.
         "flex max-h-[50%] min-h-0 flex-col pb-3 pt-0",
         CHAT_GUTTER,
+        // Static elevation, NOT queue-conditional: ChatQueue tucks its bottom
+        // edge under this surface (z-0 + negative margin on its side), and the
+        // composer simply always paints on top. Its own chrome never varies.
+        "relative z-10",
         // Outer wrapper carries the disabled cursor. Inner card sets
         // pointer-events-none, which suppresses hover (and therefore
         // any cursor of its own) — splitting the two layers lets hover
@@ -577,6 +582,7 @@ export function ChatInput({
       )}
     >
       <div
+        data-slot="chat-input-surface"
         {...(uploadEnabled ? dropZoneProps : {})}
         className={cn(
           // max-h-96 is the absolute ceiling on top of the wrapper's 50%: on a
@@ -609,12 +615,13 @@ export function ChatInput({
                 onUpdate={(updates) => onProjectChange?.(updates.project_id ?? null)}
                 disabled={!projectSelectionEnabled}
                 triggerRender={
-                  <button
-                    type="button"
+                  <ClearablePillButton
                     disabled={!projectSelectionEnabled}
                     aria-label={t(($) => $.input.change_project_context)}
                     title={t(($) => $.input.change_project_context)}
-                    className="flex h-6 max-w-56 items-center gap-1.5 rounded-full border border-surface-border bg-surface-raised px-2 text-caption font-medium text-foreground transition-colors hover:bg-accent/60"
+                    onClear={() => onProjectChange?.(null)}
+                    clearLabel={t(($) => $.input.remove_project_context)}
+                    className="h-6 border-surface-border bg-surface-raised font-medium text-foreground"
                   />
                 }
               />
@@ -682,9 +689,17 @@ export function ChatInput({
             disabled={hasNothingToSend || submitting || !!disabled || !!noAgent}
             loading={submitting}
             busy={gate.uploading}
-            running={isRunning}
+            // Queue-capable runs reuse this one action slot: an empty composer
+            // offers Stop, while live content swaps it to Queue Send. Older
+            // servers cannot accept follow-ups, so they remain stop-only. An
+            // upload blocks submit, so it also falls back to Stop rather than
+            // removing chat's only cancellation path; the attachment node
+            // remains the visible upload-progress surface in the editor.
+            running={
+              !!isRunning &&
+              (!allowSubmitWhileRunning || hasNothingToSend || gate.uploading)
+            }
             onStop={onStop}
-            allowSubmitWhileRunning={allowSubmitWhileRunning}
             tooltip={gate.uploading
               ? tEditor(($) => $.upload.in_progress)
               : isRunning

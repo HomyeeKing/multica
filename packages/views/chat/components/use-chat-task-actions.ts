@@ -217,7 +217,11 @@ export function useChatTaskActions(
           sessionId: activeSessionId,
           err,
         });
-        toast.error(t(($) => $.queue.action_failed_toast));
+        toast.error(
+          err instanceof ApiError && err.status === 409
+            ? t(($) => $.queue.steer_unavailable_toast)
+            : t(($) => $.queue.action_failed_toast),
+        );
       } finally {
         qc.invalidateQueries({ queryKey: pendingKey });
       }
