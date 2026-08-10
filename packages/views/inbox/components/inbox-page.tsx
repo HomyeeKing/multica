@@ -25,7 +25,8 @@ import {
   useArchiveCompletedInbox,
 } from "@multica/core/inbox/mutations";
 
-import { IssueDetail } from "../../issues/components";
+import { IssueDetail, issueHighlightMementoKey } from "../../issues/components";
+import { useViewStateWriter } from "../../platform";
 import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
 import { useNavigation } from "../../navigation";
 import { toast } from "sonner";
@@ -252,8 +253,21 @@ export function InboxPage() {
     }
   }, [selectedId]);
 
+  const writeViewState = useViewStateWriter();
   const handleSelect = (item: InboxItem) => {
-    setSelectedKey(item.issue_id ?? item.id);
+    const nextKey = item.issue_id ?? item.id;
+    // A click that changes the selection is a fresh deep-link intent: clear
+    // the "highlight already landed" memento entry so the comment jump runs
+    // again even if this issue's detail was opened (and its landing
+    // consumed) before. Re-clicking the already-open row doesn't remount the
+    // detail (no jump would run), so clearing there would only arm a stray
+    // replay on the next tab return. Selection restored from the URL on a
+    // remount goes through the effects above, not through here, so a tab
+    // switch back keeps the entry.
+    if (item.issue_id && nextKey !== selectedKey) {
+      writeViewState(issueHighlightMementoKey(item.issue_id), undefined);
+    }
+    setSelectedKey(nextKey);
   };
 
   const handleMarkRead = (id: string) => {

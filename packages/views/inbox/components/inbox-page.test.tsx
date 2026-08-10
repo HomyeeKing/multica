@@ -72,6 +72,7 @@ vi.mock("@multica/core/inbox/mutations", () => {
 vi.mock("../../issues/components", () => ({
   IssueDetail: () => null,
   StatusIcon: () => null,
+  issueHighlightMementoKey: (issueId: string) => `highlight:${issueId}`,
 }));
 
 const replace = vi.fn();

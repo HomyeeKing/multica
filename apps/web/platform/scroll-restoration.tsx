@@ -30,6 +30,15 @@ import {
 const savedOffsets = new Map<string, { top: number; height: number }>();
 
 /**
+ * Generic view-state entries (the desktop memento's second cargo — e.g.
+ * "this route's comment-highlight deep link already landed"). Views write
+ * through `setViewState` when the state changes and read back at mount.
+ * Same lifetime as the offsets: module state, per browser tab, reset on
+ * full reload.
+ */
+const savedViewState = new Map<string, string>();
+
+/**
  * Keys recently served through `adapter.get` are write-suppressed briefly:
  * the restoring container assigns `scrollTop` at attach time, and if its
  * content height isn't final yet the browser clamps the assignment and fires
@@ -90,6 +99,16 @@ export function WebScrollRestorationProvider({
           suppressedUntil.set(key, performance.now() + RESTORE_SUPPRESS_MS);
         }
         return saved;
+      },
+      getViewState(entryKey) {
+        return savedViewState.get(
+          mementoKey(window.location.pathname, entryKey),
+        );
+      },
+      setViewState(entryKey, value) {
+        const key = mementoKey(window.location.pathname, entryKey);
+        if (value === undefined) savedViewState.delete(key);
+        else savedViewState.set(key, value);
       },
     }),
     [],

@@ -503,6 +503,7 @@ describe("commitScrollMemento", () => {
 
     expect(useTabStore.getState().byWorkspace.acme.tabs[0].memento).toEqual({
       scroll: { "/acme/issues::board:status:todo": { top: 420, height: 8000 } },
+      view: {},
     });
   });
 
@@ -520,6 +521,7 @@ describe("commitScrollMemento", () => {
 
     expect(useTabStore.getState().byWorkspace.acme.tabs[0].memento).toEqual({
       scroll: {},
+      view: {},
     });
   });
 
@@ -555,6 +557,97 @@ describe("commitScrollMemento", () => {
     });
 
     expect(useTabStore.getState().byWorkspace.acme).toBe(before);
+  });
+
+  it("preserves view-state entries across a scroll REPLACE", () => {
+    const store = useTabStore.getState();
+    store.switchWorkspace("acme");
+    const tabId = useTabStore.getState().byWorkspace.acme.tabs[0].id;
+    store.commitViewState(tabId, "/acme/inbox", "highlight:i1", "c1");
+    store.commitScrollMemento(tabId, "/acme/inbox", {
+      list: { top: 500, height: 8000 },
+    });
+
+    // Scrolled back to 0 before leaving: REPLACE clears the route's scroll
+    // entries — but never its view-state entries.
+    store.commitScrollMemento(tabId, "/acme/inbox", {});
+
+    expect(useTabStore.getState().byWorkspace.acme.tabs[0].memento).toEqual({
+      scroll: {},
+      view: { "/acme/inbox::highlight:i1": "c1" },
+    });
+  });
+});
+
+describe("commitViewState", () => {
+  it("stores route-scoped entries on the addressed tab", () => {
+    const store = useTabStore.getState();
+    store.switchWorkspace("acme");
+    const tabId = useTabStore.getState().byWorkspace.acme.tabs[0].id;
+
+    store.commitViewState(tabId, "/acme/inbox", "highlight:i1", "c1");
+
+    expect(useTabStore.getState().byWorkspace.acme.tabs[0].memento).toEqual({
+      scroll: {},
+      view: { "/acme/inbox::highlight:i1": "c1" },
+    });
+  });
+
+  it("clears an entry when the value is undefined, leaving others intact", () => {
+    const store = useTabStore.getState();
+    store.switchWorkspace("acme");
+    const tabId = useTabStore.getState().byWorkspace.acme.tabs[0].id;
+    store.commitViewState(tabId, "/acme/inbox", "highlight:i1", "c1");
+    store.commitViewState(tabId, "/acme/inbox", "highlight:i2", "c2");
+
+    store.commitViewState(tabId, "/acme/inbox", "highlight:i1", undefined);
+
+    expect(useTabStore.getState().byWorkspace.acme.tabs[0].memento.view).toEqual({
+      "/acme/inbox::highlight:i2": "c2",
+    });
+  });
+
+  it("skips the store write when the value is unchanged", () => {
+    const store = useTabStore.getState();
+    store.switchWorkspace("acme");
+    const tabId = useTabStore.getState().byWorkspace.acme.tabs[0].id;
+    store.commitViewState(tabId, "/acme/inbox", "highlight:i1", "c1");
+    const before = useTabStore.getState().byWorkspace.acme;
+
+    store.commitViewState(tabId, "/acme/inbox", "highlight:i1", "c1");
+    store.commitViewState(tabId, "/acme/inbox", "highlight:absent", undefined);
+
+    expect(useTabStore.getState().byWorkspace.acme).toBe(before);
+  });
+
+  it("evicts the oldest entries beyond the cap", () => {
+    const store = useTabStore.getState();
+    store.switchWorkspace("acme");
+    const tabId = useTabStore.getState().byWorkspace.acme.tabs[0].id;
+    for (let i = 0; i < 101; i++) {
+      store.commitViewState(tabId, "/acme/inbox", `highlight:i${i}`, "c");
+    }
+
+    const view = useTabStore.getState().byWorkspace.acme.tabs[0].memento.view;
+    expect(Object.keys(view)).toHaveLength(100);
+    expect(view["/acme/inbox::highlight:i0"]).toBeUndefined();
+    expect(view["/acme/inbox::highlight:i100"]).toBe("c");
+  });
+
+  it("preserves scroll entries when a view-state entry commits", () => {
+    const store = useTabStore.getState();
+    store.switchWorkspace("acme");
+    const tabId = useTabStore.getState().byWorkspace.acme.tabs[0].id;
+    store.commitScrollMemento(tabId, "/acme/inbox", {
+      list: { top: 500, height: 8000 },
+    });
+
+    store.commitViewState(tabId, "/acme/inbox", "highlight:i1", "c1");
+
+    expect(useTabStore.getState().byWorkspace.acme.tabs[0].memento).toEqual({
+      scroll: { "/acme/inbox::list": { top: 500, height: 8000 } },
+      view: { "/acme/inbox::highlight:i1": "c1" },
+    });
   });
 });
 
@@ -940,7 +1033,7 @@ describe("migrateV3ToV4 (legacy view-state import, MUL-4741)", () => {
         title: "Issues",
         pinned: true,
         history: { stack: ["/acme/issues"], index: 0 },
-        memento: { scroll: {} },
+        memento: { scroll: {}, view: {} },
       },
     ]);
   });
@@ -1002,6 +1095,20 @@ describe("mergePersistedTabs (rehydration, MUL-4370)", () => {
     const tab = rehydrate(persistedTab("/acme/squads"));
     expect(tab).not.toHaveProperty("icon");
     expect(tab.url).toBe("/acme/squads");
+  });
+
+  // Payloads written before the generic view-state entries existed carry a
+  // memento with only `scroll`; the session shape requires `view` too.
+  it("normalizes a memento persisted without view-state entries", () => {
+    const tab = rehydrate(
+      persistedTab("/acme/inbox", {
+        memento: { scroll: { "/acme/inbox::list": { top: 5, height: 100 } } },
+      }),
+    );
+    expect(tab.memento).toEqual({
+      scroll: { "/acme/inbox::list": { top: 5, height: 100 } },
+      view: {},
+    });
   });
 
   function rehydrateGroup(

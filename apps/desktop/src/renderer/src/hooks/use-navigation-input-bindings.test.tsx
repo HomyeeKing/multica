@@ -26,7 +26,7 @@ function seedHistory() {
               stack: ["/acme/issues", "/acme/issues/abc"],
               index: 1,
             },
-            memento: { scroll: {} },
+            memento: { scroll: {}, view: {} },
           },
         ],
         activeTabId: "t1",
