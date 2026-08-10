@@ -81,11 +81,25 @@ type wecomChannel struct {
 	// itself on entry and clear on exit. nil in tests that don't exercise
 	// the OutboundReplier path.
 	senders *sendersRegistry
+	// metrics is the health sink (metrics.go). Never read directly — go
+	// through mx(), which substitutes the no-op sink for a channel built
+	// without one.
+	metrics Metrics
 }
 
 var _ channel.Channel = (*wecomChannel)(nil)
 
 func (c *wecomChannel) Type() channel.Type { return TypeWecom }
+
+// mx returns a sink that is always safe to call. Tests construct
+// wecomChannel literals without one, and a deployment with /metrics off
+// wires nil deliberately.
+func (c *wecomChannel) mx() Metrics {
+	if c.metrics == nil {
+		return nopMetrics{}
+	}
+	return c.metrics
+}
 
 // Capabilities declares what the aibot adapter supports today. Text is the
 // only fully wired capability; attachments arrive as MsgTypeImage / File /
@@ -135,6 +149,7 @@ func (c *wecomChannel) Connect(ctx context.Context) (err error) {
 
 	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
+		c.mx().RecordConnectFailure()
 		return fmt.Errorf("wecom: dial %s: %w", wsURL, err)
 	}
 	defer conn.Close()
@@ -284,6 +299,18 @@ func (c *wecomChannel) Connect(ctx context.Context) (err error) {
 		case cmdMsgCallback, cmdEventCallback:
 			select {
 			case callbacks <- env:
+				c.mx().RecordCallbackQueued()
+				continue
+			default:
+				// The worker is behind. Blocking is the deliberate choice
+				// (see below), and it is also the thing an operator wants to
+				// know about — from here on the socket stops being drained,
+				// and if it lasts, WeCom replaces the connection.
+				c.mx().RecordCallbackQueueBlocked()
+			}
+			select {
+			case callbacks <- env:
+				c.mx().RecordCallbackQueued()
 			case <-cbDone:
 				// The worker has stopped, so this send has no receiver — and
 				// no closer either: the queue is closed by a defer that
@@ -319,8 +346,17 @@ const callbackQueueDepth = 64
 
 // subscribe sends the aibot_subscribe frame and waits (up to
 // subscribeTimeout) for the server's ack. The ack shape is a frame with
-// echoed headers.req_id + errcode; errcode == 0 means good, anything else
-// is fatal (bad credentials / bot doesn't exist).
+// echoed headers.req_id + errcode; errcode == 0 means good.
+//
+// A non-zero errcode goes through classifySubscribeAck — the same function the
+// install-time credential probe uses on the same ack, so the two cannot answer
+// the same code differently. 40001 / 40013 come back as ErrCredentialsRejected:
+// the refusal that repeats identically on every backoff until somebody fixes
+// the installation. Every other non-zero code is ErrCredentialsUnverifiable,
+// because a throttle (45009, 45033) or a platform-side failure clears on its
+// own, and counting one as a credential failure would page an operator about a
+// tenant whose bot is fine. Both sentinels are exported, so channel/engine —
+// which is what receives this error out of Connect() — can branch on them.
 func (c *wecomChannel) subscribe(ctx context.Context, conn wsConn, sender *wsSender, log *slog.Logger) error {
 	reqID := newReqID()
 	if err := sender.write(map[string]any{
@@ -328,6 +364,7 @@ func (c *wecomChannel) subscribe(ctx context.Context, conn wsConn, sender *wsSen
 		"headers": frameHeaders{ReqID: reqID},
 		"body":    subscribeBody(c.botID, c.secret),
 	}); err != nil {
+		c.mx().RecordConnectFailure()
 		return fmt.Errorf("wecom: send subscribe: %w", err)
 	}
 
@@ -343,6 +380,13 @@ func (c *wecomChannel) subscribe(ctx context.Context, conn wsConn, sender *wsSen
 		}
 		typ, payload, err := conn.ReadMessage()
 		if err != nil {
+			// The socket died, the ack never arrived inside
+			// subscribeTimeout, or our own ctx was cancelled mid-read and
+			// the watchdog closed the socket under us. Infrastructure or a
+			// shutdown — nobody has to be told either way, and the next
+			// backoff may well succeed. A rolling restart therefore adds a
+			// few counts here; the rate matters, a handful does not.
+			c.mx().RecordConnectFailure()
 			return fmt.Errorf("wecom: subscribe read: %w", err)
 		}
 		if typ != websocket.TextMessage && typ != websocket.BinaryMessage {
@@ -360,7 +404,28 @@ func (c *wecomChannel) subscribe(ctx context.Context, conn wsConn, sender *wsSen
 			continue
 		}
 		if env.ErrCode != 0 {
-			return fmt.Errorf("wecom: subscribe rejected errcode=%d errmsg=%s", env.ErrCode, env.ErrMsg)
+			// Which of the two counters this is depends on what the ack
+			// means, and classifySubscribeAck already decides that — the
+			// same verdict the install-time credential probe gets. Branch on
+			// its answer rather than testing the errcode again here: a
+			// second copy of rejectionErrCodes would be free to drift from
+			// the probe's, and then the dashboard and the install screen
+			// would disagree about the same code.
+			err := classifySubscribeAck(log, env.ErrCode, env.ErrMsg)
+			if errors.Is(err, ErrCredentialsRejected) {
+				// Refused on its merits: a wrong secret, a deleted bot.
+				// Counted apart from every other connection failure because
+				// it is the only one that repeats identically on every
+				// backoff until a person changes something.
+				c.mx().RecordAuthFailure()
+			} else {
+				// Unverifiable — a throttle, or a platform-side failure.
+				// It clears on its own, exactly like a dial that did not
+				// land, so it belongs on that counter and not on the one an
+				// operator reads as "go rotate a credential".
+				c.mx().RecordConnectFailure()
+			}
+			return err
 		}
 		return nil
 	}
@@ -377,16 +442,26 @@ func (c *wecomChannel) dispatchFrame(ctx context.Context, env frameEnvelope, sen
 			log.Warn("wecom: bad aibot_msg_callback body", "error", err)
 			return nil
 		}
-		traceInbound(log, mc, mc.Text.Content)
+		// Trace the body the adapter will actually route, not the typed
+		// field: a voice note carries its words in voice.content, and an
+		// operator who turned tracing on to follow one would otherwise read
+		// len=0 next to a bot that answered.
+		body, routable := mc.bodyText()
+		traceInbound(log, mc, body)
 		msg := channelMessageFromCallback(c.botID, c.botDisplayName, mc, env.Headers.ReqID)
-		if mc.MsgType != "text" {
-			// Iteration 1 routes only text. Rather than drop other types
-			// (voice / image / file) silently — which reads as a broken bot —
+		// A voice note is a sentence that happened to be spoken: WeCom does
+		// the recognition and hands over the transcript, so it needs no
+		// download, no media key and no storage. Answering it with "I only
+		// handle text" was refusing content we already had in hand.
+		if !routable {
+			// Kinds that carry a downloadable payload (image / file / video /
+			// mixed), and a voice note whose recognition came back empty.
+			// Rather than drop them silently — which reads as a broken bot —
 			// answer the same chat with a one-line "text only" receipt, then
 			// stop. Media routing, and dedup'd receipts that never double-answer
 			// a WeCom delivery retry, are a follow-up. Best-effort: a send
 			// failure degrades to the prior silent drop.
-			log.Debug("wecom: non-text message, replying text-only", "msg_type", mc.MsgType, "msg_id", mc.MsgID)
+			log.Debug("wecom: unroutable message, replying text-only", "msg_type", mc.MsgType, "msg_id", mc.MsgID)
 			if err := sender.sendText(msg.Source.ChatID, aibotChatTypeFromChannel(msg.Source.ChatType), "抱歉，我目前只能处理文字消息。"); err != nil {
 				log.Debug("wecom: text-only receipt send failed", "error", err, "msg_id", mc.MsgID)
 			}
@@ -518,6 +593,11 @@ type ChannelDeps struct {
 	// constructor. Nil in tests that don't exercise outbound.
 	Senders *sendersRegistry
 
+	// Metrics is the health sink every built channel reports through. Nil
+	// discards every counter, which is what a deployment with /metrics
+	// turned off gets.
+	Metrics Metrics
+
 	// Dialer overrides the default gorilla dialer. Tests point it at an
 	// httptest server; production leaves this nil.
 	Dialer Dialer
@@ -568,6 +648,7 @@ func newWecomFactory(deps ChannelDeps) channel.Factory {
 			wsURL:          deps.WSURL,
 			logger:         logger,
 			senders:        deps.Senders,
+			metrics:        orNopMetrics(deps.Metrics),
 		}, nil
 	}
 }
