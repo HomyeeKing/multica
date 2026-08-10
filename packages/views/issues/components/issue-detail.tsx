@@ -1172,7 +1172,18 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // Whether this issue's comment-highlight deep link already landed here
   // (survives the tab's unmount, unlike didHighlightRef below): a remount
   // that restores the view must not re-run the jump.
+  //
+  // The landing effect reads it through a ref, NOT through its dependency
+  // array: recording the landing writes this very value, and as an effect
+  // dependency that write would re-fire the effect one commit after the
+  // jump — whose cleanup cancels the centering rAF loop and the highlight
+  // fade before a single frame ran. Every path that must re-evaluate the
+  // landing already re-runs the effect through another dependency (mount,
+  // items arriving, token bump), and the render that precedes it refreshes
+  // this ref.
   const consumedHighlightId = useRestoredViewState(issueHighlightMementoKey(id));
+  const consumedHighlightRef = useRef(consumedHighlightId);
+  consumedHighlightRef.current = consumedHighlightId;
   const writeViewState = useViewStateWriter();
   const attachScrollContainer = useCallback(
     (el: HTMLDivElement | null) => {
@@ -1751,7 +1762,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     // switch back or an in-tab return). The restored scroll offset is the
     // state the user left, and the jump must not fight it. A fresh selection
     // clears the entry, so this only ever suppresses a *repeat* landing.
-    if (consumedHighlightId === highlightCommentId) {
+    if (consumedHighlightRef.current === highlightCommentId) {
       didHighlightRef.current = highlightCommentId;
       return;
     }
@@ -1825,7 +1836,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       cancelAnimationFrame(rafId);
       clearTimeout(fade);
     };
-  }, [highlightCommentId, highlightRequestToken, consumedHighlightId, id, writeViewState, items, targetIdx, scrollContainerEl, replyToRoot, expandedResolved, timelineView, toggleResolvedExpand]);
+  }, [highlightCommentId, highlightRequestToken, id, writeViewState, items, targetIdx, scrollContainerEl, replyToRoot, expandedResolved, timelineView, toggleResolvedExpand]);
 
   const descEditorRef = useRef<ContentEditorRef>(null);
   // Keep the description editor mounted from the start. Unlike the empty
@@ -2035,7 +2046,15 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     restoreKey: `${wsId}:${id}`,
     scrollContainerEl,
     ready: !!issue && !loading && !timelineLoading,
-    disabled: !!highlightCommentId,
+    // Disabled only while the comment deep link still has a landing to run —
+    // the jump owns the scroll then. Once the landing is consumed (a tab
+    // switch back), this hook's retry loop IS the restore: the one-shot
+    // ref-attach assignment clamps against a container whose async content
+    // (markdown, images) hasn't reached its captured height yet.
+    disabled: !!highlightCommentId && consumedHighlightId !== highlightCommentId,
+    // The tab memento's offset, when the platform serves one. It must win
+    // over this hook's module-level map — see the parameter doc.
+    overrideTop: restoredScrollTop,
   });
 
   if (loading) {
