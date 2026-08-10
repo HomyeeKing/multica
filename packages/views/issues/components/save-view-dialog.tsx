@@ -32,6 +32,10 @@ import { Toggle } from "@multica/ui/components/ui/toggle";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCreateIssueView, useUpdateIssueView } from "@multica/core/issue-views/mutations";
+import {
+  issueViewContainerKey,
+  useActiveIssueViewStore,
+} from "@multica/core/issue-views/active-view-store";
 import { ApiError } from "@multica/core/api/client";
 import type { CreateIssueViewRequest, IssueView } from "@multica/core/api/schemas";
 import { projectListOptions } from "@multica/core/projects/queries";
@@ -435,6 +439,7 @@ export function SaveViewDialog({
   const wsId = useWorkspaceId();
   const liveStore = useViewStoreApi();
   const createView = useCreateIssueView(wsId);
+  const setActiveInStore = useActiveIssueViewStore((s) => s.setActive);
   const updateView = useUpdateIssueView(wsId);
 
   const [name, setName] = useState("");
@@ -601,8 +606,21 @@ export function SaveViewDialog({
       return;
     }
     createView.mutate(payload, {
-      onSuccess: () => {
+      onSuccess: (created) => {
         toast.success(t(($) => $.save_view.toast_created));
+        // The view you just saved is the one you want to be looking at:
+        // activate it on its surface right away. `created` is null only
+        // when the response failed to parse — the list refetch still shows
+        // the view, it just doesn't auto-open.
+        if (created) {
+          setActiveInStore(
+            issueViewContainerKey(wsId, {
+              scope_type: payload.scope_type,
+              scope_id: payload.scope_id,
+            }),
+            created.id,
+          );
+        }
         onOpenChange(false);
       },
       onError: (err) => {
