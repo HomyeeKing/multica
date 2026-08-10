@@ -62,6 +62,7 @@ export {
   pruneIssueSurfaceViewStates,
   getIssueSurfaceViewStateRegistrySnapshot,
 } from "./surface-view-store";
+export { useSubIssuesCollapseStore } from "./sub-issues-collapse-store";
 export {
   useSubIssueDisplayStore,
   SUB_ISSUE_ROW_PROPERTY_KEYS,

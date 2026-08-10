@@ -104,6 +104,51 @@ function useNativeNavigationGestures() {
   }, [goBack, goForward]);
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+/**
+ * Keyboard and mouse back/forward for the active tab's history:
+ * Cmd/Ctrl+[ / ] and Cmd/Ctrl+←/→ (browser convention), plus mouse side
+ * buttons 3/4 (macOS/Linux — Windows arrives via app-command through
+ * useNativeNavigationGestures).
+ */
+function useNavigationInputBindings() {
+  const { goBack, goForward } = useTabHistory();
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || e.altKey || e.shiftKey) return;
+      const back = e.key === "[" || e.key === "ArrowLeft";
+      const forward = e.key === "]" || e.key === "ArrowRight";
+      if (!back && !forward) return;
+      // In editable contexts these chords belong to the text field:
+      // cmd+arrow moves the caret to the line edge, cmd+bracket indents.
+      if (isEditableTarget(e.target)) return;
+      e.preventDefault();
+      if (back) goBack();
+      else goForward();
+    };
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button !== 3 && e.button !== 4) return;
+      e.preventDefault();
+      if (e.button === 3) goBack();
+      else goForward();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [goBack, goForward]);
+}
+
 // The main area's top bar doubles as a window drag region. When the sidebar
 // is not occupying main-flow width, leave room for the fixed window toolbar
 // so tabs do not land beneath the traffic lights / navigation controls.
@@ -213,6 +258,7 @@ function DesktopInboxBridge() {
 export function DesktopShell() {
   useInternalLinkHandler();
   useNativeNavigationGestures();
+  useNavigationInputBindings();
 
   // Reactive read of current workspace slug from the platform singleton.
   // On first mount, slug is null until WorkspaceRouteLayout (inside the tab

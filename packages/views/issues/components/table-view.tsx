@@ -114,7 +114,7 @@ import {
 } from "@tanstack/react-query";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { LabelChip } from "../../labels/label-chip";
-import { useNavigation } from "../../navigation";
+import { resolveClickIntent, useIntentNavigate } from "../../navigation";
 import { ProjectPicker } from "../../projects/components/project-picker";
 import { useT } from "../../i18n";
 import { useIssueSurfaceActionsOptional } from "../surface/actions-context";
@@ -646,7 +646,7 @@ export function InlineTitle({
   onEditingChange: (editing: boolean) => void;
   onUpdate: (updates: Partial<UpdateIssueRequest>) => void;
   /** Navigate to the issue — clicking the title is the primary way IN. */
-  onOpen: () => void;
+  onOpen: (event: React.MouseEvent) => void;
   onCreateSubIssue: () => void;
   onToggleParent: () => void;
   toggleLabel: string;
@@ -742,7 +742,7 @@ export function InlineTitle({
             className="min-w-0 flex-1 truncate text-left hover:underline"
             onClick={(event) => {
               event.stopPropagation();
-              onOpen();
+              onOpen(event);
             }}
           >
             {row.issue.title}
@@ -929,7 +929,7 @@ type TableViewMeta = {
   editingCellKey: string | null;
   setEditingCellKey: (key: string | null) => void;
   updateIssue: (issueId: string, updates: Partial<UpdateIssueRequest>) => void;
-  openIssue: (issue: Issue) => void;
+  openIssue: (issue: Issue, event?: React.MouseEvent) => void;
   createSubIssue: (issue: Issue) => void;
   toggleTableParentCollapsed: (issueId: string) => void;
   handleIssueSelection: (issueId: string, shiftKey: boolean) => void;
@@ -1127,7 +1127,7 @@ function IssueTableBodyCell({
           editing={editorOpen}
           onEditingChange={setEditorOpen}
           onUpdate={onUpdate}
-          onOpen={() => meta.openIssue(issue)}
+          onOpen={(event) => meta.openIssue(issue, event)}
           onCreateSubIssue={() => meta.createSubIssue(issue)}
           onToggleParent={() => meta.toggleTableParentCollapsed(issue.id)}
           toggleLabel={t(($) => $.table.toggle_sub_issues)}
@@ -1275,7 +1275,7 @@ export function TableView({
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
-  const navigation = useNavigation();
+  const intentNavigate = useIntentNavigate();
   const paths = useWorkspacePaths();
   const actions = useIssueSurfaceActionsOptional();
   const selection = useIssueSurfaceSelection();
@@ -2093,20 +2093,17 @@ export function TableView({
   );
 
   const openIssue = useCallback(
-    (issue: Issue) => {
-      const path = paths.issueDetail(issue.id);
-      if (navigation.openInNewTab) {
-        navigation.openInNewTab(path, issue.identifier, { activate: true });
-        return;
-      }
-
-      window.open(
-        navigation.getShareableUrl(path),
-        "_blank",
-        "noopener,noreferrer",
+    (issue: Issue, event?: React.MouseEvent) => {
+      // Standard link semantics: plain click navigates in place; modifier /
+      // middle clicks open tabs. Callbacks without an event (keyboard
+      // affordances) count as plain clicks.
+      intentNavigate(
+        paths.issueDetail(issue.id),
+        event ? resolveClickIntent(event) : "push",
+        issue.identifier,
       );
     },
-    [navigation, paths],
+    [intentNavigate, paths],
   );
 
   const createSubIssue = useCallback(
@@ -2421,9 +2418,9 @@ export function TableView({
             table={table}
             virtualizeRows
             emptyMessage={t(($) => $.table.empty)}
-            onRowClick={(row) => {
+            onRowClick={(row, event) => {
               if (row.original.kind === "issue") {
-                openIssue(row.original.issue);
+                openIssue(row.original.issue, event);
               }
             }}
             renderRow={(row) => {

@@ -236,13 +236,29 @@ vi.mock("@tanstack/react-query", () => ({
   }),
 }));
 
-vi.mock("../navigation", () => ({
-  useNavigation: () => ({
-    push: mockPush,
-    pathname: mockPathname.current,
-    getShareableUrl: mockGetShareableUrl,
-  }),
-}));
+vi.mock("../navigation", async () => {
+  // Real resolver — pure, no React context.
+  const { resolveClickIntent } = await vi.importActual<
+    typeof import("../navigation/click-intent")
+  >("../navigation/click-intent");
+  return {
+    resolveClickIntent,
+    useNavigation: () => ({
+      push: mockPush,
+      pathname: mockPathname.current,
+      getShareableUrl: mockGetShareableUrl,
+    }),
+    // No tab adapter in this harness: "push" pushes, tab intents open a
+    // browser tab against the shareable URL — same shape as the real hook.
+    useIntentNavigate: () => (href: string, intent: string) => {
+      if (intent === "push") {
+        mockPush(href);
+        return;
+      }
+      window.open(mockGetShareableUrl(href), "_blank", "noopener,noreferrer");
+    },
+  };
+});
 
 vi.mock("@multica/ui/components/common/theme-provider", () => ({
   useTheme: () => ({ theme: mockTheme.current, setTheme: mockSetTheme }),

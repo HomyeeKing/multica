@@ -28,7 +28,7 @@ import { Switch } from "@multica/ui/components/ui/switch";
 import { api, ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
-import { useNavigation } from "../navigation";
+import { AppLink } from "../navigation";
 import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import {
@@ -118,7 +118,6 @@ export function AgentCreatePanel({
   const sendShortcut = useShortcut("send");
   const workspaceName = useCurrentWorkspace()?.name;
   const workspacePaths = useWorkspacePaths();
-  const navigation = useNavigation();
   const wsId = useWorkspaceId();
   const userId = useAuthStore((s) => s.user?.id);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
@@ -538,7 +537,6 @@ export function AgentCreatePanel({
   const openFieldSettings = () => {
     setAgent({ prompt: editorRef.current?.getMarkdown() ?? "" });
     onClose();
-    navigation.push(`${workspacePaths.settings()}?tab=issue`);
   };
 
   return (
@@ -733,7 +731,14 @@ export function AgentCreatePanel({
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={openFieldSettings}>
+              <DropdownMenuItem
+                render={
+                  <AppLink
+                    href={`${workspacePaths.settings()}?tab=issue`}
+                    onClick={openFieldSettings}
+                  />
+                }
+              >
                 <Settings2 className="size-3.5 text-muted-foreground" />
                 {t(($) => $.create_issue.agent.customize_fields)}
               </DropdownMenuItem>

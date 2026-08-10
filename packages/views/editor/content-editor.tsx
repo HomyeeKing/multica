@@ -659,6 +659,24 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
             );
             return true;
           },
+          // Middle click never produces a `click` event. Route it through the
+          // same path as a cmd-click (background tab) — on desktop the native
+          // window-open request dead-ends against the shell's deny handler.
+          auxclick(_view, event) {
+            if (event.button !== 1) return false;
+            const target = event.target as HTMLElement;
+            if (target.closest("[data-node-view-wrapper]")) return false;
+            const href = target.closest("a")?.getAttribute("href");
+            if (!href || isMentionHref(href)) return false;
+            event.preventDefault();
+            openLink(
+              href,
+              workspaceSlugRef.current,
+              appOriginRef.current,
+              "background-tab",
+            );
+            return true;
+          },
         },
         attributes: {
           class: cn("flex-1 rich-text-editor text-body outline-none", className),

@@ -16,7 +16,11 @@ import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
 import { MemberProfileCard } from "../members/member-profile-card";
 import { SquadProfileCard } from "../squads/components/squad-profile-card";
 import { availabilityConfig } from "../agents/presence";
-import { useNavigation } from "../navigation";
+import {
+  resolveClickIntent,
+  useNavigation,
+  type LinkClickIntent,
+} from "../navigation";
 
 /**
  * Selects which agent hover-card payload to render when `enableHoverCard` is
@@ -144,6 +148,15 @@ export function ActorAvatar({
   return content;
 }
 
+/**
+ * Not an `<a>` on purpose: the avatar is often composed inside menu items,
+ * options and buttons, where it must yield the click to the surrounding
+ * control untouched (no preventDefault — a real anchor would need one to
+ * suppress its own navigation, and a pre-prevented click can change how the
+ * host control behaves). The cost is no native context menu; modifier and
+ * middle clicks are implemented here instead, with the same intent semantics
+ * as AppLink.
+ */
 function ActorAvatarProfileLink({
   href,
   children,
@@ -153,26 +166,37 @@ function ActorAvatarProfileLink({
 }) {
   const { push, openInNewTab, getShareableUrl } = useNavigation();
 
-  const navigate = (event: React.MouseEvent | React.KeyboardEvent) => {
-    const controlAncestor = event.currentTarget.parentElement?.closest(
-      PROFILE_LINK_CONTROL_SELECTOR,
-    );
-    if (controlAncestor) return;
+  const insideControl = (event: React.SyntheticEvent) =>
+    !!event.currentTarget.parentElement?.closest(PROFILE_LINK_CONTROL_SELECTOR);
 
-    event.preventDefault();
-    event.stopPropagation();
-    if ("metaKey" in event && (event.metaKey || event.ctrlKey || event.shiftKey)) {
-      if (openInNewTab) {
-        openInNewTab(href);
-        return;
-      }
-      // Web: the trigger is a `<span role="link">`, not an anchor, so there is
-      // no native modifier-click behaviour to fall back to — open the browser
-      // tab here rather than letting the click navigate in place.
-      window.open(getShareableUrl(href), "_blank", "noopener,noreferrer");
+  const open = (intent: LinkClickIntent) => {
+    if (intent === "push") {
+      push(href);
       return;
     }
-    push(href);
+    if (openInNewTab) {
+      if (intent === "foreground-tab") {
+        openInNewTab(href, undefined, { activate: true });
+      } else {
+        openInNewTab(href);
+      }
+      return;
+    }
+    // Web: the trigger is a `<span role="link">`, not an anchor, so there is
+    // no native modifier-click behaviour to fall back to — open the browser
+    // tab here rather than letting the click navigate in place.
+    window.open(getShareableUrl(href), "_blank", "noopener,noreferrer");
+  };
+
+  const navigate = (event: React.MouseEvent | React.KeyboardEvent) => {
+    if (insideControl(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    open(
+      "metaKey" in event && "button" in event
+        ? resolveClickIntent(event as React.MouseEvent)
+        : "push",
+    );
   };
 
   return (
@@ -181,6 +205,13 @@ function ActorAvatarProfileLink({
       tabIndex={-1}
       className="inline-flex cursor-pointer rounded-full"
       onClick={navigate}
+      onAuxClick={(event) => {
+        if (event.defaultPrevented || event.button !== 1) return;
+        if (insideControl(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        open("background-tab");
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           navigate(event);

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigation } from "../navigation";
+import { AppLink, useNavigation } from "../navigation";
 import {
   AlertTriangle,
   ArrowDown,
@@ -383,14 +383,6 @@ export function ManualCreatePanel({
     start_date: manualFields.includes("start_date") || startDate !== null || startDatePickerOpen,
   };
 
-  // Field visibility lives in Settings → Issue; the modal closes first so the
-  // dialog doesn't linger over the settings page. The draft store already
-  // holds everything typed, so nothing is lost across the round-trip.
-  const openFieldSettings = () => {
-    onClose();
-    router.push(`${p.settings()}?tab=issue`);
-  };
-
   const createIssueMutation = useCreateIssue();
   const updateIssueMutation = useUpdateIssue();
   const attachLabelMutation = useAttachLabelToIssue();
@@ -591,6 +583,9 @@ export function ManualCreatePanel({
               <StatusIcon status={issue.status} className="size-3.5 shrink-0" />
               <span className="truncate">{issue.identifier} – {issue.title}</span>
             </div>
+            {/* Not an AppLink: sonner renders toast content under <Toaster />,
+                which is mounted outside NavigationProvider, so useNavigation()
+                would throw here. */}
             <button
               type="button"
               className="ml-7 mt-2 text-body text-primary hover:underline cursor-pointer"
@@ -632,6 +627,8 @@ export function ManualCreatePanel({
                 <div className="flex items-center gap-2 text-body text-muted-foreground ml-7">
                   <span className="truncate">{dup.issue.identifier} – {dup.issue.title}</span>
                 </div>
+                {/* See the created-issue toast above: toast content lives
+                    outside NavigationProvider, so this stays a button. */}
                 <button
                   type="button"
                   className="ml-7 mt-2 text-body text-primary hover:underline cursor-pointer"
@@ -1177,7 +1174,18 @@ export function ManualCreatePanel({
                     </DropdownMenuSub>
                   )}
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={openFieldSettings}>
+                  {/* Field visibility lives in Settings → Issue; the modal
+                      closes first so the dialog doesn't linger over the
+                      settings page. The draft store already holds everything
+                      typed, so nothing is lost across the round-trip. */}
+                  <DropdownMenuItem
+                    render={
+                      <AppLink
+                        href={`${p.settings()}?tab=issue`}
+                        onClick={onClose}
+                      />
+                    }
+                  >
                     <Settings2 className="h-3.5 w-3.5" />
                     {t(($) => $.create_issue.customize_fields)}
                   </DropdownMenuItem>
