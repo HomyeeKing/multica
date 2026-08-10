@@ -26,9 +26,15 @@ import { ProjectMentionCard } from "../../projects/components/project-mention-ca
 export function MentionView({ node }: NodeViewProps) {
   const { type, id, label } = node.attrs;
 
+  // stopPropagation mirrors the readonly renderer's mention wrappers: a chip
+  // click must not reach surrounding click handlers.
   if (type === "issue") {
     return (
-      <NodeViewWrapper as="span" className="inline">
+      <NodeViewWrapper
+        as="span"
+        className="inline"
+        onClick={(e: React.MouseEvent) => e.stopPropagation()}
+      >
         <IssueMentionCard issueId={id} fallbackLabel={label} />
       </NodeViewWrapper>
     );
@@ -36,7 +42,11 @@ export function MentionView({ node }: NodeViewProps) {
 
   if (type === "project") {
     return (
-      <NodeViewWrapper as="span" className="inline">
+      <NodeViewWrapper
+        as="span"
+        className="inline"
+        onClick={(e: React.MouseEvent) => e.stopPropagation()}
+      >
         <ProjectMentionCard projectId={id} fallbackLabel={label} />
       </NodeViewWrapper>
     );

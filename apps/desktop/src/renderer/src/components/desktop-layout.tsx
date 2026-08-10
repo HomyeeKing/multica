@@ -13,7 +13,10 @@ import { AppSidebar, GlobalShortcuts } from "@multica/views/layout";
 import { SearchCommand, SearchTrigger } from "@multica/views/search";
 import { FloatingChat } from "@multica/views/chat";
 import { WorkspaceSlugProvider, paths, useCurrentWorkspace } from "@multica/core/paths";
-import { useNavigation } from "@multica/views/navigation";
+import {
+  useNavigation,
+  type LinkClickIntent,
+} from "@multica/views/navigation";
 import { getCurrentSlug, subscribeToCurrentSlug } from "@multica/core/platform";
 import { useDesktopUnreadBadge } from "@multica/views/platform";
 import {
@@ -152,7 +155,9 @@ function MainCanvas({ children }: { children: React.ReactNode }) {
 function useInternalLinkHandler() {
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
+      const detail = (
+        e as CustomEvent<{ path?: string; disposition?: LinkClickIntent }>
+      ).detail;
       if (!detail?.path) return;
       routeContentLinkPath(detail.path, detail.disposition);
     };
