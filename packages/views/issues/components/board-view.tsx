@@ -43,6 +43,7 @@ import type {
   IssueGroupPageState,
 } from "../surface/use-issue-group-branches";
 import { useDragSettle } from "./use-drag-settle";
+import { useRightButtonPan } from "./use-right-button-pan";
 import { useT } from "../../i18n";
 import {
   type DragMoveUpdates,
@@ -393,6 +394,9 @@ function BoardViewImpl({
     })
   );
 
+  // HOM-9: hold the right mouse button and move to pan the board horizontally.
+  const pan = useRightButtonPan<HTMLDivElement>();
+
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
       isDraggingRef.current = true;
@@ -556,7 +560,12 @@ function BoardViewImpl({
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
     >
-      <div className="flex flex-1 min-h-0 gap-4 overflow-x-auto p-2">
+      <div
+        ref={pan.ref}
+        onMouseDown={pan.onMouseDown}
+        onContextMenu={pan.onContextMenu}
+        className="flex flex-1 min-h-0 gap-4 overflow-x-auto p-2"
+      >
         {groups.length === 0 ? (
           groupBranches?.isError ? (
             <button
