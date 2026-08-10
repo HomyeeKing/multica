@@ -936,6 +936,15 @@ interface IssueDetailProps {
   /** When set, the issue detail will auto-scroll to this comment and briefly highlight it. */
   highlightCommentId?: string;
   /**
+   * Bump to replay the `highlightCommentId` landing on an already-mounted
+   * detail. A remount replays it by itself (fresh mount, cleared memento
+   * entry); this token is for the one path with neither remount nor
+   * guaranteed re-render — re-clicking the notification row that is already
+   * open (see InboxPage.handleSelect). The bump both re-arms the landing
+   * guard and forces the render that re-reads the cleared memento entry.
+   */
+  highlightRequestToken?: number;
+  /**
    * Far-left header slot, replacing the mobile sidebar trigger. A host that
    * embeds this detail one level deep (the inbox, on a phone) passes its own
    * "back" control here instead of stacking a second 48px bar above us — the
@@ -1064,7 +1073,7 @@ export function IssueDetailSkeleton({ leading }: { leading?: ReactNode } = {}) {
 // IssueDetail
 // ---------------------------------------------------------------------------
 
-export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId, leadingAction }: IssueDetailProps) {
+export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId, highlightRequestToken, leadingAction }: IssueDetailProps) {
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
   const id = issueId;
@@ -1249,6 +1258,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     });
   }, []);
   const didHighlightRef = useRef<string | null>(null);
+  // Last seen highlightRequestToken; a bump re-arms didHighlightRef so the
+  // landing effect below replays on an already-mounted detail.
+  const lastHighlightRequestTokenRef = useRef(highlightRequestToken);
 
   // Issue data from TQ — uses detail query, seeded from list cache if available.
   // Only seed when description is present; the list API omits it, so a partial
@@ -1727,6 +1739,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // the timeline (and the deep-link target id) has actually rendered.
   useEffect(() => {
     if (!highlightCommentId || items.length === 0) return;
+    // An explicit replay request (re-click on the already-open notification
+    // row): the host cleared the memento entry and bumped the token, so
+    // re-arm the landing guard and fall through to the jump.
+    if (lastHighlightRequestTokenRef.current !== highlightRequestToken) {
+      lastHighlightRequestTokenRef.current = highlightRequestToken;
+      didHighlightRef.current = null;
+    }
     if (didHighlightRef.current === highlightCommentId) return;
     // The deep link already landed before this mount (memento entry — a tab
     // switch back or an in-tab return). The restored scroll offset is the
@@ -1806,7 +1825,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       cancelAnimationFrame(rafId);
       clearTimeout(fade);
     };
-  }, [highlightCommentId, consumedHighlightId, id, writeViewState, items, targetIdx, scrollContainerEl, replyToRoot, expandedResolved, timelineView, toggleResolvedExpand]);
+  }, [highlightCommentId, highlightRequestToken, consumedHighlightId, id, writeViewState, items, targetIdx, scrollContainerEl, replyToRoot, expandedResolved, timelineView, toggleResolvedExpand]);
 
   const descEditorRef = useRef<ContentEditorRef>(null);
   // Keep the description editor mounted from the start. Unlike the empty
