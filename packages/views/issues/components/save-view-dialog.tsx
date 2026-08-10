@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Plus } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, Plus } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
@@ -147,13 +147,14 @@ const ROW_LABEL = "w-16 shrink-0 text-caption text-muted-foreground";
 
 /** Filter row + layout row + collapsible display defaults, all bound to the
  *  DRAFT store via the surrounding provider. */
-function DraftDefinitionFields() {
+export function DraftDefinitionFields() {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const viewMode = useViewStore((s) => s.viewMode);
   const grouping = useViewStore((s) => s.grouping);
   const swimlaneGrouping = useViewStore((s) => s.swimlaneGrouping);
   const sortBy = useViewStore((s) => s.sortBy);
+  const sortDirection = useViewStore((s) => s.sortDirection);
   const cardProperties = useViewStore((s) => s.cardProperties);
   const cardPropertyIds = useViewStore((s) => s.cardPropertyIds);
   const act = useViewStoreApi().getState();
@@ -184,7 +185,20 @@ function DraftDefinitionFields() {
     sortBy in SORT_LABEL_KEY
       ? t(($) => $.display[SORT_LABEL_KEY[sortBy as keyof typeof SORT_LABEL_KEY]])
       : propertyName(sortBy);
-  const displaySummary = [layoutLabel, groupingLabel, sortLabel].filter(Boolean).join(" · ");
+  const sortDirectionLabel =
+    sortBy === "position"
+      ? null
+      : sortDirection === "asc"
+        ? t(($) => $.display.ascending_title)
+        : t(($) => $.display.descending_title);
+  const displaySummary = [
+    layoutLabel,
+    groupingLabel,
+    sortLabel,
+    sortDirectionLabel,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <>
@@ -333,40 +347,62 @@ function DraftDefinitionFields() {
               <Label className={ROW_LABEL}>
                 {t(($) => $.display.ordering_section)}
               </Label>
-              <Select
-                items={[
-                  ...SORT_OPTIONS.map((opt) => ({
-                    value: opt.value as string,
-                    label: t(($) => $.display[SORT_LABEL_KEY[opt.value as keyof typeof SORT_LABEL_KEY]]),
-                  })),
-                  ...sortableProperties.map((p) => ({
-                    value: `property:${p.id}`,
-                    label: p.name,
-                  })),
-                ]}
-                value={sortBy}
-                onValueChange={(v) => {
-                  if (v) act.setSortBy(v as SortField);
-                }}
-              >
-                <SelectTrigger size="sm" className="w-64" aria-label={t(($) => $.display.ordering_section)}>
-                  <SelectValue>{sortLabel}</SelectValue>
-                </SelectTrigger>
-                <SelectContent align="start">
-                  <SelectGroup>
-                    {SORT_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {t(($) => $.display[SORT_LABEL_KEY[opt.value as keyof typeof SORT_LABEL_KEY]])}
-                      </SelectItem>
-                    ))}
-                    {sortableProperties.map((property) => (
-                      <SelectItem key={property.id} value={`property:${property.id}`}>
-                        {property.name}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-1.5">
+                <Select
+                  items={[
+                    ...SORT_OPTIONS.map((opt) => ({
+                      value: opt.value as string,
+                      label: t(($) => $.display[SORT_LABEL_KEY[opt.value as keyof typeof SORT_LABEL_KEY]]),
+                    })),
+                    ...sortableProperties.map((p) => ({
+                      value: `property:${p.id}`,
+                      label: p.name,
+                    })),
+                  ]}
+                  value={sortBy}
+                  onValueChange={(v) => {
+                    if (v) act.setSortBy(v as SortField);
+                  }}
+                >
+                  <SelectTrigger size="sm" className="w-64" aria-label={t(($) => $.display.ordering_section)}>
+                    <SelectValue>{sortLabel}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    <SelectGroup>
+                      {SORT_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {t(($) => $.display[SORT_LABEL_KEY[opt.value as keyof typeof SORT_LABEL_KEY]])}
+                        </SelectItem>
+                      ))}
+                      {sortableProperties.map((property) => (
+                        <SelectItem key={property.id} value={`property:${property.id}`}>
+                          {property.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                {sortBy !== "position" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() =>
+                      act.setSortDirection(
+                        sortDirection === "asc" ? "desc" : "asc",
+                      )
+                    }
+                    aria-label={sortDirectionLabel ?? undefined}
+                    title={sortDirectionLabel ?? undefined}
+                  >
+                    {sortDirection === "asc" ? (
+                      <ArrowUp className="size-3.5" />
+                    ) : (
+                      <ArrowDown className="size-3.5" />
+                    )}
+                  </Button>
+                )}
+              </div>
             </div>
             {viewMode !== "table" && (
               <div className="flex items-start gap-3">
