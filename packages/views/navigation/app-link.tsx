@@ -1,6 +1,7 @@
 "use client";
 
 import { forwardRef } from "react";
+import { resolveClickIntent } from "./click-intent";
 import { useNavigation } from "./context";
 
 interface AppLinkProps extends React.AnchorHTMLAttributes<HTMLAnchorElement> {
@@ -31,11 +32,25 @@ export const AppLink = forwardRef<HTMLAnchorElement, AppLinkProps>(
     const { push, openInNewTab, prefetch } = useNavigation();
 
     const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
-      if (e.metaKey || e.ctrlKey || e.shiftKey) {
+      const intent = resolveClickIntent(e);
+      if (intent !== "push") {
         if (openInNewTab) {
           e.preventDefault();
-          openInNewTab(href, newTabTitle);
+          if (intent === "foreground-tab") {
+            openInNewTab(href, newTabTitle, { activate: true });
+          } else {
+            openInNewTab(href, newTabTitle);
+          }
         }
+        // Web: no adapter — the browser's native anchor handling already
+        // implements the spec (cmd = background tab, cmd+shift = foreground).
+        return;
+      }
+      if (e.shiftKey && !openInNewTab) {
+        // Web shift-click is the browser's "new window". Shift alone is not a
+        // spec modifier (it resolves to "push"), but fighting the native
+        // behavior with an in-place push would swallow a deliberate gesture.
+        // Desktop has no native path, so it falls through to a plain push.
         return;
       }
       if (target === "_blank") {

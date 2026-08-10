@@ -66,7 +66,7 @@ import {
 import { configStore } from "@multica/core/config";
 import { preprocessMarkdown } from "./utils/preprocess";
 import { repairEmptyListItems } from "./utils/repair-list-items";
-import { useAppOrigin } from "../navigation";
+import { resolveClickIntent, useAppOrigin } from "../navigation";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { EditorBubbleMenu } from "./bubble-menu";
 import { posFromAnchor, type TextAnchor } from "./text-anchor";
@@ -651,7 +651,12 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
             if (!href || isMentionHref(href)) return false;
 
             event.preventDefault();
-            openLink(href, workspaceSlugRef.current, appOriginRef.current);
+            openLink(
+              href,
+              workspaceSlugRef.current,
+              appOriginRef.current,
+              resolveClickIntent(event),
+            );
             return true;
           },
         },

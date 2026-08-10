@@ -1,9 +1,12 @@
 export {
   NavigationProvider,
   useNavigation,
+  useOptionalNavigation,
   useIsNavigating,
 } from "./context";
 export { AppLink } from "./app-link";
+export { resolveClickIntent } from "./click-intent";
+export type { LinkClickIntent } from "./click-intent";
 export { useAppOrigin } from "./use-app-origin";
 export { useRowLink } from "./use-row-link";
 export { useBackOrReplace } from "./use-back-or-replace";

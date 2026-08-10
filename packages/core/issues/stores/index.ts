@@ -22,7 +22,6 @@ export {
   selectExpandedResolved,
 } from "./resolved-expand-store";
 export { useCommentComposerStore } from "./comment-composer-store";
-export { useIssueLinkStore } from "./issue-link-store";
 export { useCommentDraftStore, type CommentDraftKey } from "./comment-draft-store";
 export {
   myIssuesViewStore,

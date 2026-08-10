@@ -152,9 +152,9 @@ function MainCanvas({ children }: { children: React.ReactNode }) {
 function useInternalLinkHandler() {
   useEffect(() => {
     const handler = (e: Event) => {
-      const path = (e as CustomEvent).detail?.path;
-      if (!path) return;
-      routeContentLinkPath(path);
+      const detail = (e as CustomEvent).detail;
+      if (!detail?.path) return;
+      routeContentLinkPath(detail.path, detail.disposition);
     };
     window.addEventListener("multica:navigate", handler);
     return () => window.removeEventListener("multica:navigate", handler);

@@ -99,6 +99,42 @@ describe("AppLink", () => {
     expect(openInNewTab).toHaveBeenCalledWith("/issues", "MUL-7");
   });
 
+  it("cmd+shift-click opens a FOREGROUND tab (activate) — the spec's 'take me there' modifier", () => {
+    const push = vi.fn();
+    const openInNewTab = vi.fn();
+    const adapter = makeAdapter({ push, openInNewTab });
+
+    renderLink(adapter);
+    fireEvent.click(screen.getByText("go"), { metaKey: true, shiftKey: true });
+    expect(openInNewTab).toHaveBeenCalledWith("/issues", undefined, {
+      activate: true,
+    });
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("shift-alone click on desktop is a plain click (in-place push) — shift is not a spec modifier", () => {
+    const push = vi.fn();
+    const openInNewTab = vi.fn();
+    const adapter = makeAdapter({ push, openInNewTab });
+
+    renderLink(adapter);
+    fireEvent.click(screen.getByText("go"), { shiftKey: true });
+    expect(push).toHaveBeenCalledWith("/issues");
+    expect(openInNewTab).not.toHaveBeenCalled();
+  });
+
+  it("shift-alone click without an adapter (web) is left to the browser's native new-window handling", () => {
+    const push = vi.fn();
+    const adapter = makeAdapter({ push });
+
+    renderLink(adapter);
+    const defaultNotPrevented = fireEvent.click(screen.getByText("go"), {
+      shiftKey: true,
+    });
+    expect(defaultNotPrevented).toBe(true);
+    expect(push).not.toHaveBeenCalled();
+  });
+
   describe("target=_blank (open-in-new-tab links)", () => {
     it("plain click opens a foreground new tab via the adapter (desktop) and does NOT push", () => {
       const push = vi.fn();

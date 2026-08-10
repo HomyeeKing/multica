@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import {
   NavigationProvider,
+  type LinkClickIntent,
   type NavigationAdapter,
 } from "@multica/views/navigation";
 import { useAuthStore } from "@multica/core/auth";
@@ -96,27 +97,37 @@ function tryRouteToOtherWorkspace(path: string): boolean {
 }
 
 /**
- * Open a path that a link inside content resolved to (the `multica:navigate`
- * event fired by the shared editor/markdown link handler) in a foreground tab.
+ * Execute a content link (the `multica:navigate` event fired by the shared
+ * editor/markdown link handler) with the disposition the click resolved to:
+ * a plain click navigates in place — the same thing a plain click means on
+ * every other internal link — and modifier clicks open a background or
+ * foreground tab.
  *
- * A content link is a jump to another subject, so it gets its own tab rather
- * than replacing what the user was reading. It can also address another
- * workspace — a pasted app URL, an agent quoting a cross-workspace issue — and
- * opening that inside the active workspace's tab group would mount it under the
- * wrong group, so the slug check routes it through switchWorkspace exactly like
- * an adapter push does.
+ * A content link can also address another workspace — a pasted app URL, an
+ * agent quoting a cross-workspace issue — and opening that inside the active
+ * workspace's tab group would mount it under the wrong group, so the slug
+ * check routes it through switchWorkspace exactly like an adapter push does.
  */
-export function routeContentLinkPath(path: string): void {
+export function routeContentLinkPath(
+  path: string,
+  disposition: LinkClickIntent = "push",
+): void {
   const store = useTabStore.getState();
   const slug = extractWorkspaceSlug(path);
   if (slug && slug !== store.activeWorkspaceSlug) {
     store.switchWorkspace(slug, path);
     return;
   }
+  if (disposition === "push") {
+    const active = getActiveTab(store);
+    if (active && active.url === path) return;
+    if (tryRouteToPinnedNewTab(path)) return;
+    store.navigateActiveSession(path);
+    return;
+  }
   // Empty seed title — the tab bar derives the real title from the URL and
   // cache; a raw path would flash before that resolves.
-  const tabId = store.openTab(path, "");
-  store.setActiveTab(tabId);
+  store.openTab(path, "", { activate: disposition === "foreground-tab" });
 }
 
 /**
