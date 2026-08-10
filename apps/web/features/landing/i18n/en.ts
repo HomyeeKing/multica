@@ -294,6 +294,38 @@ export function createEnDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
+        version: "0.4.21",
+        date: "2026-08-07",
+        title: "WeCom bots, a new Analytics page, and leaner agent prompts",
+        changes: [],
+        features: [
+          "Your agents can now live in WeCom — DM them or @-mention them in a group.",
+          "The new Analytics page keeps spend and errors on separate tabs, each with its own charts.",
+          "Images sent with /issue in a channel now stay in the description, right where you put them.",
+        ],
+        improvements: [
+          "Agents read leaner discussion data each run, leaving more room for your work.",
+          "Cancelled work no longer outranks live work in search and the @-mention picker.",
+          "Analytics filters close once you pick, and big numbers on charts are no longer cut off.",
+          "An agent waiting on a local folder now shows as idle instead of busy.",
+          "The docs now cover setting up WeCom and QwenPaw.",
+        ],
+        fixes: [
+          "On tablets and foldables, inbox and chat no longer squeeze into a narrow strip.",
+          "When a task fails, the channel now tells you why.",
+          "An agent with nothing to deliver no longer replies with a placeholder sentence.",
+          "Your own chat messages now show up reliably in other windows and devices.",
+          "Runs you stopped now count toward run time and task totals.",
+          "An ordinary agent is no longer mistaken for a squad leader.",
+          "CodeBuddy now starts with the MCP servers you configured.",
+          "Remote MCP servers are no longer silently ignored on some runtimes.",
+          "An OpenCode run that produced nothing no longer reports success.",
+          "OpenCode tasks with very long prompts now start on Windows.",
+          "Codex tasks on Windows can now commit code.",
+          "Kimi usage and cost no longer go missing now and then.",
+        ],
+      },
+      {
         version: "0.4.20",
         date: "2026-08-06",
         title: "DingTalk bots, a guided first run with Mika, and per-run token costs",

@@ -91,11 +91,30 @@ const (
 // shrink it, same as the other timing knobs in this package.
 var pendingWorkHintMinInterval = time.Second
 
+// repoCheckoutModeFor picks the Git metadata layout for a task's
+// `multica repo checkout`. Under Codex's workspace-write sandbox a linked
+// worktree's gitdir resolves into the shared cache and stays read-only even
+// when the task workdir is an explicit writable root, so `git add` /
+// `git commit` fail from inside the checkout — Linux hit this in
+// multica-ai/multica#2925, Codex's native Windows sandbox in
+// multica-ai/multica#6449.
+//
+// Both platforms now default to danger-full-access (execenv's
+// codexSandboxPolicyFor), so in practice only a user who opted into
+// windows.sandbox still trips the Windows case. The layout stays a per-platform
+// choice rather than a per-policy one: it is decided before a task's resolved
+// sandbox config is known, one workdir is reused across tasks whose policies
+// can differ, and task-local metadata is correct under either policy.
 func repoCheckoutModeFor(provider, goos string) string {
-	if provider == "codex" && goos == "linux" {
-		return repoCheckoutModeIsolated
+	if provider != "codex" {
+		return ""
 	}
-	return ""
+	switch goos {
+	case "linux", "windows":
+		return repoCheckoutModeIsolated
+	default:
+		return ""
+	}
 }
 
 var (
@@ -112,6 +131,23 @@ func taskScopedAuthToken(task Task) (string, error) {
 		return "", errors.New("server provided non-task-scoped auth token")
 	}
 	return token, nil
+}
+
+func taskMulticaEnvironment(task Task, agentName, token, configRoot, serverURL string, healthPort, slot int, tempDir string) map[string]string {
+	return map[string]string{
+		"MULTICA_TOKEN":        token,
+		cli.TaskConfigRootEnv:  configRoot,
+		"MULTICA_SERVER_URL":   serverURL,
+		"MULTICA_DAEMON_PORT":  strconv.Itoa(healthPort),
+		"MULTICA_WORKSPACE_ID": task.WorkspaceID,
+		"MULTICA_AGENT_NAME":   agentName,
+		"MULTICA_AGENT_ID":     task.AgentID,
+		"MULTICA_TASK_ID":      task.ID,
+		"MULTICA_TASK_SLOT":    strconv.Itoa(slot),
+		"TMPDIR":               tempDir,
+		"TMP":                  tempDir,
+		"TEMP":                 tempDir,
+	}
 }
 
 // taskRunner executes a single agent task and returns the result.
@@ -476,7 +512,7 @@ type Daemon struct {
 
 	activeCodexStoresMu   sync.Mutex
 	activeCodexStoresCond *sync.Cond      // signalled when an in-flight store deletion finishes, so a blocked markActive can proceed
-	activeCodexStores     map[string]int  // per-issue Codex session store path -> live-task refcount; guards the store from GC mid-task (MUL-4424)
+	activeCodexStores     map[string]int  // per-conversation Codex session store path -> live-task refcount; guards the store from GC mid-task (MUL-4424)
 	deletingCodexStores   map[string]bool // store paths a GC delete has reserved; markActive waits these out so a task never mounts a store mid-removal
 
 	// localPathLocks serialises agent tasks whose project resource is a
@@ -5818,7 +5854,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// store's stale (pre-remount) mtime cannot reclaim it out from under a resume
 	// of a long-idle issue (MUL-4424). No-op for non-Codex tasks / no stable key.
 	if provider == "codex" {
-		if store := execenv.CodexSessionStorePath(d.cfg.Profile, task.AgentID, task.IssueID); store != "" {
+		if store := execenv.CodexSessionStorePath(d.cfg.Profile, taskCtx); store != "" {
 			d.markActiveCodexStore(store)
 			defer d.unmarkActiveCodexStore(store)
 		}
@@ -5971,19 +6007,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		taskLog.Error("task auth token invalid; refusing to start agent", "error", err)
 		return TaskResult{}, err
 	}
-	agentEnv := map[string]string{
-		"MULTICA_TOKEN":        agentToken,
-		"MULTICA_SERVER_URL":   d.cfg.ServerBaseURL,
-		"MULTICA_DAEMON_PORT":  fmt.Sprintf("%d", d.cfg.HealthPort),
-		"MULTICA_WORKSPACE_ID": task.WorkspaceID,
-		"MULTICA_AGENT_NAME":   agentName,
-		"MULTICA_AGENT_ID":     task.AgentID,
-		"MULTICA_TASK_ID":      task.ID,
-		"MULTICA_TASK_SLOT":    strconv.Itoa(slot),
-		"TMPDIR":               taskTempDir,
-		"TMP":                  taskTempDir,
-		"TEMP":                 taskTempDir,
-	}
+	agentEnv := taskMulticaEnvironment(task, agentName, agentToken, env.MulticaConfigRoot, d.cfg.ServerBaseURL, d.cfg.HealthPort, slot, taskTempDir)
 	if checkoutMode := repoCheckoutModeFor(provider, runtime.GOOS); checkoutMode != "" {
 		agentEnv[repoCheckoutModeEnv] = checkoutMode
 	}
@@ -6020,10 +6044,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if env.CodexHome != "" {
 		agentEnv["CODEX_HOME"] = env.CodexHome
 	}
-	// HOME and the XDG base dirs are deliberately not touched here: tasks run
-	// with the daemon user's real home on every platform, so host CLI config
-	// and credentials resolve inside a task exactly as they do in the daemon
-	// user's shell (MUL-5578).
+	// HOME and the XDG base dirs are deliberately not touched here: provider
+	// tools such as gh, aws, kubectl, and npm continue resolving the daemon
+	// user's existing state (MUL-5578). The Multica CLI is the exception:
+	// MULTICA_TASK_CONFIG_ROOT above redirects its implicit profile lookup to
+	// private task-local state and prevents Owner-profile fallback.
 	// (Hermes HERMES_HOME is applied after custom_env below so the per-task
 	// overlay can win over a user-set HERMES_HOME; see
 	// layerCustomEnvAndHermesHome.)

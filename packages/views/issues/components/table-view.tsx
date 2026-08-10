@@ -58,6 +58,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
+  DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -525,22 +526,14 @@ export function TableColumnPicker({
                 {t(($) => $.table.columns.system_section)}
               </DropdownMenuLabel>
               {systemColumns.map((key) => (
-                <DropdownMenuItem
+                <DropdownMenuCheckboxItem
                   key={key}
                   disabled={key === "title"}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    toggleTableColumn(key);
-                  }}
+                  checked={selected.has(key)}
+                  onCheckedChange={() => toggleTableColumn(key)}
                 >
-                  <input
-                    type="checkbox"
-                    checked={selected.has(key)}
-                    readOnly
-                    className="size-3.5 accent-primary"
-                  />
                   {t(($) => $.table.columns[key as ColumnLabelKey])}
-                </DropdownMenuItem>
+                </DropdownMenuCheckboxItem>
               ))}
             </DropdownMenuGroup>
           )}
@@ -554,21 +547,13 @@ export function TableColumnPicker({
                 {visibleProperties.map((property) => {
                   const key = `property:${property.id}` as const;
                   return (
-                    <DropdownMenuItem
+                    <DropdownMenuCheckboxItem
                       key={property.id}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        toggleTableColumn(key);
-                      }}
+                      checked={selected.has(key)}
+                      onCheckedChange={() => toggleTableColumn(key)}
                     >
-                      <input
-                        type="checkbox"
-                        checked={selected.has(key)}
-                        readOnly
-                        className="size-3.5 accent-primary"
-                      />
                       <span className="truncate">{property.name}</span>
-                    </DropdownMenuItem>
+                    </DropdownMenuCheckboxItem>
                   );
                 })}
               </DropdownMenuGroup>

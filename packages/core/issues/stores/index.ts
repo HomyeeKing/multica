@@ -15,7 +15,12 @@ export {
   useViewStore,
   useViewStoreApi,
 } from "./view-store-context";
-export { useIssuesScopeStore, type IssuesScope } from "./issues-scope-store";
+export {
+  useIssuesScope,
+  useIssuesScopeStore,
+  type IssuesScope,
+  type IssuesScopePageKey,
+} from "./issues-scope-store";
 export { useCommentCollapseStore } from "./comment-collapse-store";
 export {
   useResolvedExpandStore,
