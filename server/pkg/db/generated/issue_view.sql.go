@@ -84,9 +84,18 @@ func (q *Queries) CreateIssueView(ctx context.Context, arg CreateIssueViewParams
 }
 
 const deleteIssueView = `-- name: DeleteIssueView :one
-DELETE FROM issue_view
-WHERE id = $1 AND workspace_id = $2
-RETURNING id
+WITH deleted AS (
+    DELETE FROM issue_view
+    WHERE issue_view.id = $1 AND issue_view.workspace_id = $2
+    RETURNING issue_view.id
+),
+swept_pins AS (
+    DELETE FROM pinned_item
+    WHERE pinned_item.item_type = 'view'
+      AND pinned_item.workspace_id = $2
+      AND pinned_item.item_id IN (SELECT deleted.id FROM deleted)
+)
+SELECT deleted.id FROM deleted
 `
 
 type DeleteIssueViewParams struct {
@@ -94,6 +103,9 @@ type DeleteIssueViewParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 }
 
+// Every view delete sweeps its sidebar pins in the same statement: a pin
+// whose view is gone is invisible in the UI (view pins never auto-unpin)
+// and would otherwise be unremovable forever.
 func (q *Queries) DeleteIssueView(ctx context.Context, arg DeleteIssueViewParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, deleteIssueView, arg.ID, arg.WorkspaceID)
 	var id pgtype.UUID
@@ -117,8 +129,15 @@ func (q *Queries) DeleteIssueViewPreferencesByUser(ctx context.Context, arg Dele
 }
 
 const deleteIssueViewsByProjectScope = `-- name: DeleteIssueViewsByProjectScope :exec
-DELETE FROM issue_view
-WHERE workspace_id = $1 AND scope_type = 'project' AND scope_id = $2
+WITH deleted AS (
+    DELETE FROM issue_view
+    WHERE issue_view.workspace_id = $1 AND issue_view.scope_type = 'project' AND issue_view.scope_id = $2
+    RETURNING issue_view.id
+)
+DELETE FROM pinned_item
+WHERE pinned_item.item_type = 'view'
+  AND pinned_item.workspace_id = $1
+  AND pinned_item.item_id IN (SELECT deleted.id FROM deleted)
 `
 
 type DeleteIssueViewsByProjectScopeParams struct {
@@ -127,15 +146,23 @@ type DeleteIssueViewsByProjectScopeParams struct {
 }
 
 // Project deletion cleanup: called inside DeleteProject's application
-// transaction so project views never outlive their surface.
+// transaction so project views never outlive their surface. Their sidebar
+// pins fall in the same statement (see DeleteIssueView).
 func (q *Queries) DeleteIssueViewsByProjectScope(ctx context.Context, arg DeleteIssueViewsByProjectScopeParams) error {
 	_, err := q.db.Exec(ctx, deleteIssueViewsByProjectScope, arg.WorkspaceID, arg.ScopeID)
 	return err
 }
 
 const deletePrivateIssueViewsByOwner = `-- name: DeletePrivateIssueViewsByOwner :exec
-DELETE FROM issue_view
-WHERE workspace_id = $1 AND owner_id = $2 AND visibility = 'private'
+WITH deleted AS (
+    DELETE FROM issue_view
+    WHERE issue_view.workspace_id = $1 AND issue_view.owner_id = $2 AND issue_view.visibility = 'private'
+    RETURNING issue_view.id
+)
+DELETE FROM pinned_item
+WHERE pinned_item.item_type = 'view'
+  AND pinned_item.workspace_id = $1
+  AND pinned_item.item_id IN (SELECT deleted.id FROM deleted)
 `
 
 type DeletePrivateIssueViewsByOwnerParams struct {
@@ -145,7 +172,8 @@ type DeletePrivateIssueViewsByOwnerParams struct {
 
 // Member removal: a departed member's private views are unreachable by every
 // remaining member while still consuming their quota — same rule as private
-// quick actions. Shared views are workspace furniture and survive.
+// quick actions. Shared views are workspace furniture and survive. Pins on
+// the deleted views fall in the same statement (see DeleteIssueView).
 func (q *Queries) DeletePrivateIssueViewsByOwner(ctx context.Context, arg DeletePrivateIssueViewsByOwnerParams) error {
 	_, err := q.db.Exec(ctx, deletePrivateIssueViewsByOwner, arg.WorkspaceID, arg.OwnerID)
 	return err

@@ -495,6 +495,12 @@ func TestRevokeMemberSweepsPrivateViewsAndPreferences(t *testing.T) {
 	`, testWorkspaceID, otherID); err != nil {
 		t.Fatalf("seed preference: %v", err)
 	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO pinned_item (workspace_id, user_id, item_type, item_id, position)
+		SELECT $1::uuid, $2::uuid, 'view', id, 1 FROM issue_view WHERE name = 'revoke private'
+	`, testWorkspaceID, otherID); err != nil {
+		t.Fatalf("seed pin: %v", err)
+	}
 	t.Cleanup(func() {
 		testPool.Exec(ctx, `DELETE FROM issue_view WHERE name LIKE 'revoke %'`)
 		testPool.Exec(ctx, `DELETE FROM issue_view_preference WHERE user_id = $1`, otherID)
@@ -512,7 +518,7 @@ func TestRevokeMemberSweepsPrivateViewsAndPreferences(t *testing.T) {
 		t.Fatalf("revoke: %v", err)
 	}
 
-	var privateCount, sharedCount, prefCount int
+	var privateCount, sharedCount, prefCount, pinCount int
 	testPool.QueryRow(ctx, `SELECT COUNT(*) FROM issue_view WHERE name = 'revoke private'`).Scan(&privateCount)
 	testPool.QueryRow(ctx, `SELECT COUNT(*) FROM issue_view WHERE name = 'revoke shared'`).Scan(&sharedCount)
 	testPool.QueryRow(ctx, `SELECT COUNT(*) FROM issue_view_preference WHERE user_id = $1`, otherID).Scan(&prefCount)
@@ -524,5 +530,87 @@ func TestRevokeMemberSweepsPrivateViewsAndPreferences(t *testing.T) {
 	}
 	if prefCount != 0 {
 		t.Fatal("view-bar preferences survived member removal")
+	}
+	testPool.QueryRow(ctx, `SELECT COUNT(*) FROM pinned_item WHERE item_type = 'view' AND user_id = $1`, otherID).Scan(&pinCount)
+	if pinCount != 0 {
+		t.Fatal("pins on the removed member's private views survived")
+	}
+}
+
+// Deleting a view — directly, or via its project's deletion — must sweep the
+// sidebar pins that point at it: view pins never auto-unpin client-side, so a
+// surviving row would be invisible and unremovable forever.
+func TestDeletingViewsSweepsTheirPins(t *testing.T) {
+
+	ctx := context.Background()
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM pinned_item WHERE item_type = 'view'`)
+	})
+	countViewPins := func() int {
+		var n int
+		testPool.QueryRow(ctx, `SELECT COUNT(*) FROM pinned_item WHERE item_type = 'view'`).Scan(&n)
+		return n
+	}
+	pinView := func(viewID string) {
+		w := httptest.NewRecorder()
+		testHandler.CreatePin(w, newRequest("POST", "/api/pins", map[string]any{
+			"item_type": "view",
+			"item_id":   viewID,
+		}))
+		if w.Code != http.StatusCreated {
+			t.Fatalf("pin view: expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+	}
+
+	// 1) Direct handler delete.
+	view, code, body := createIssueViewForTest(t, map[string]any{
+		"name":       "Sweep on delete",
+		"scope_type": "workspace",
+		"query":      map[string]any{},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", code, body)
+	}
+	pinView(view.ID)
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest("DELETE", "/api/issue-views/"+view.ID, nil), "id", view.ID)
+	testHandler.DeleteIssueView(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete view: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+	if n := countViewPins(); n != 0 {
+		t.Fatalf("pin survived direct view delete: %d rows", n)
+	}
+
+	// 2) Project deletion cascades through its scoped views.
+	w = httptest.NewRecorder()
+	testHandler.CreateProject(w, newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "pin sweep project",
+	}))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create project: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var project ProjectResponse
+	json.NewDecoder(w.Body).Decode(&project)
+
+	projView, code, body := createIssueViewForTest(t, map[string]any{
+		"name":       "Project pinned view",
+		"scope_type": "project",
+		"scope_id":   project.ID,
+		"query":      map[string]any{},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", code, body)
+	}
+	pinView(projView.ID)
+
+	w = httptest.NewRecorder()
+	req = withURLParam(newRequest("DELETE", "/api/projects/"+project.ID, nil), "id", project.ID)
+	testHandler.DeleteProject(w, req)
+	if w.Code >= 300 {
+		t.Fatalf("delete project: got %d: %s", w.Code, w.Body.String())
+	}
+	if n := countViewPins(); n != 0 {
+		t.Fatalf("pin survived project deletion: %d rows", n)
 	}
 }

@@ -47,22 +47,50 @@ WHERE id = $1 AND workspace_id = $2 AND revision = $8
 RETURNING *;
 
 -- name: DeleteIssueView :one
-DELETE FROM issue_view
-WHERE id = $1 AND workspace_id = $2
-RETURNING id;
+-- Every view delete sweeps its sidebar pins in the same statement: a pin
+-- whose view is gone is invisible in the UI (view pins never auto-unpin)
+-- and would otherwise be unremovable forever.
+WITH deleted AS (
+    DELETE FROM issue_view
+    WHERE issue_view.id = $1 AND issue_view.workspace_id = $2
+    RETURNING issue_view.id
+),
+swept_pins AS (
+    DELETE FROM pinned_item
+    WHERE pinned_item.item_type = 'view'
+      AND pinned_item.workspace_id = $2
+      AND pinned_item.item_id IN (SELECT deleted.id FROM deleted)
+)
+SELECT deleted.id FROM deleted;
 
 -- name: DeleteIssueViewsByProjectScope :exec
 -- Project deletion cleanup: called inside DeleteProject's application
--- transaction so project views never outlive their surface.
-DELETE FROM issue_view
-WHERE workspace_id = $1 AND scope_type = 'project' AND scope_id = $2;
+-- transaction so project views never outlive their surface. Their sidebar
+-- pins fall in the same statement (see DeleteIssueView).
+WITH deleted AS (
+    DELETE FROM issue_view
+    WHERE issue_view.workspace_id = $1 AND issue_view.scope_type = 'project' AND issue_view.scope_id = $2
+    RETURNING issue_view.id
+)
+DELETE FROM pinned_item
+WHERE pinned_item.item_type = 'view'
+  AND pinned_item.workspace_id = $1
+  AND pinned_item.item_id IN (SELECT deleted.id FROM deleted);
 
 -- name: DeletePrivateIssueViewsByOwner :exec
 -- Member removal: a departed member's private views are unreachable by every
 -- remaining member while still consuming their quota — same rule as private
--- quick actions. Shared views are workspace furniture and survive.
-DELETE FROM issue_view
-WHERE workspace_id = $1 AND owner_id = $2 AND visibility = 'private';
+-- quick actions. Shared views are workspace furniture and survive. Pins on
+-- the deleted views fall in the same statement (see DeleteIssueView).
+WITH deleted AS (
+    DELETE FROM issue_view
+    WHERE issue_view.workspace_id = $1 AND issue_view.owner_id = $2 AND issue_view.visibility = 'private'
+    RETURNING issue_view.id
+)
+DELETE FROM pinned_item
+WHERE pinned_item.item_type = 'view'
+  AND pinned_item.workspace_id = $1
+  AND pinned_item.item_id IN (SELECT deleted.id FROM deleted);
 
 -- name: DeleteIssueViewPreferencesByUser :exec
 DELETE FROM issue_view_preference
