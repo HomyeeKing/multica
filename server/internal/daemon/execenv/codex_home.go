@@ -394,21 +394,21 @@ func codexSessionStoreNamespace(profile string) string {
 // malformed value can never escape the store root. Returns "" when there is no
 // issue to key on (the store is issue-scoped), leaving sessions/ task-local.
 func codexSessionStoreKey(profile, agentID, issueID string) string {
-	issue := sanitizeCodexPathSegment(issueID)
+	issue := sanitizePathSegment(issueID)
 	if issue == "" {
 		return ""
 	}
-	agent := sanitizeCodexPathSegment(agentID)
+	agent := sanitizePathSegment(agentID)
 	if agent == "" {
 		agent = "_"
 	}
 	return filepath.Join(codexSessionStoreNamespace(profile), agent, issue)
 }
 
-// sanitizeCodexPathSegment reduces s to the characters a UUID uses (hex plus
+// sanitizePathSegment reduces s to the characters a UUID uses (hex plus
 // dashes/underscores), dropping everything else so the result is always a single
 // safe path segment — no separators, no "..", no drive letters.
-func sanitizeCodexPathSegment(s string) string {
+func sanitizePathSegment(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch {
