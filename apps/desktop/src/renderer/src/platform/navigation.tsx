@@ -221,10 +221,15 @@ export function DesktopNavigationProvider({
         opts?: { activate?: boolean },
       ) => {
         // Cross-workspace "open in new tab" switches workspace and opens
-        // the path there (focus follows the user); same-workspace defaults
-        // to background tab (browser cmd+click semantics). Callers that
-        // represent an explicit "Open in new tab" CTA pass `activate: true`
-        // to bring the new tab to the foreground.
+        // the path there (focus follows the user), REGARDLESS of
+        // `opts.activate`. This is a deliberate product exception to the
+        // background-tab contract (decided with MUL-5860): a background tab
+        // added to a non-visible workspace's group would give the user zero
+        // feedback — "nothing happened" is worse than losing the background
+        // semantics for the rare cross-workspace link. Same-workspace
+        // defaults to background tab (browser cmd+click semantics); callers
+        // that represent an explicit "Open in new tab" CTA pass
+        // `activate: true` to bring the new tab to the foreground.
         const slug = extractWorkspaceSlug(path);
         const store = useTabStore.getState();
         if (slug && slug !== store.activeWorkspaceSlug) {

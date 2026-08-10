@@ -338,6 +338,7 @@ function IssueCheckbox({
         event.stopPropagation();
         onToggle(event.shiftKey);
       }}
+      onAuxClick={stopRowNavigation}
       onChange={() => undefined}
       className="size-3.5 cursor-pointer accent-primary"
     />
@@ -696,6 +697,9 @@ export function InlineTitle({
         }
         gestureStartedWhileEditingRef.current = false;
       }}
+      onAuxClickCapture={(event) => {
+        if (editing) event.stopPropagation();
+      }}
     >
       {row.hasChildren ? (
         <button
@@ -706,6 +710,7 @@ export function InlineTitle({
             event.stopPropagation();
             onToggleParent();
           }}
+          onAuxClick={stopRowNavigation}
         >
           {row.collapsed ? (
             <ChevronRight className="size-3.5" />
@@ -773,6 +778,7 @@ export function InlineTitle({
                 event.stopPropagation();
                 onCreateSubIssue();
               }}
+              onAuxClick={stopRowNavigation}
             >
               <Plus className="size-3" />
             </button>
@@ -785,6 +791,7 @@ export function InlineTitle({
                 setDraft(row.issue.title);
                 onEditingChange(true);
               }}
+              onAuxClick={stopRowNavigation}
             >
               <Pencil className="size-3" />
             </button>
@@ -808,7 +815,7 @@ function LazyLabelCell({
   const labels = issue.labels ?? [];
   if (open) {
     return (
-      <div onClick={stopRowNavigation}>
+      <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
         <LabelPicker
           issueId={issue.id}
           open
@@ -828,6 +835,7 @@ function LazyLabelCell({
         event.stopPropagation();
         onOpenChange(true);
       }}
+      onAuxClick={stopRowNavigation}
     >
       {labels.length > 0 ? (
         <>
@@ -1109,7 +1117,7 @@ function IssueTableBodyCell({
     const property = meta.propertyById.get(propertyId);
     if (!property) return null;
     return (
-      <div onClick={stopRowNavigation}>
+      <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
         <CustomPropertyValueEditor
           issue={issue}
           property={property}
@@ -1141,7 +1149,7 @@ function IssueTableBodyCell({
       );
     case "status":
       return (
-        <div onClick={stopRowNavigation}>
+        <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
           <StatusPicker
             status={issue.status}
             onUpdate={onUpdate}
@@ -1153,7 +1161,7 @@ function IssueTableBodyCell({
       );
     case "priority":
       return (
-        <div onClick={stopRowNavigation}>
+        <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
           <PriorityPicker
             priority={issue.priority}
             onUpdate={onUpdate}
@@ -1165,7 +1173,7 @@ function IssueTableBodyCell({
       );
     case "assignee":
       return (
-        <div onClick={stopRowNavigation}>
+        <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
           <AssigneePicker
             assigneeType={issue.assignee_type}
             assigneeId={issue.assignee_id}
@@ -1186,7 +1194,7 @@ function IssueTableBodyCell({
       );
     case "project":
       return (
-        <div onClick={stopRowNavigation}>
+        <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
           <ProjectPicker
             projectId={issue.project_id}
             onUpdate={onUpdate}
@@ -1203,7 +1211,7 @@ function IssueTableBodyCell({
       );
     case "start_date":
       return (
-        <div onClick={stopRowNavigation}>
+        <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
           <StartDatePicker
             startDate={issue.start_date}
             onUpdate={onUpdate}
@@ -1214,7 +1222,7 @@ function IssueTableBodyCell({
       );
     case "due_date":
       return (
-        <div onClick={stopRowNavigation}>
+        <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
           <DueDatePicker
             dueDate={issue.due_date}
             onUpdate={onUpdate}

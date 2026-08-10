@@ -194,6 +194,82 @@ describe("useTabStore actions", () => {
     expect(s.byWorkspace.acme.tabs[0].url).toBe("/acme/issues");
   });
 
+  describe("openTab insertion position (MUL-5860)", () => {
+    const urls = () =>
+      useTabStore.getState().byWorkspace.acme.tabs.map((t) => t.url);
+
+    it("inserts the new tab immediately right of the active tab, not at the end", () => {
+      const store = useTabStore.getState();
+      store.switchWorkspace("acme"); // A = /acme/issues, active
+      store.addTab("/acme/projects", "B");
+      store.addTab("/acme/skills", "C");
+      expect(urls()).toEqual(["/acme/issues", "/acme/projects", "/acme/skills"]);
+
+      store.openTab("/acme/issues/d", "D"); // background: A stays active
+      const s = useTabStore.getState();
+      expect(urls()).toEqual([
+        "/acme/issues",
+        "/acme/issues/d",
+        "/acme/projects",
+        "/acme/skills",
+      ]);
+      expect(getActiveTab(s)?.url).toBe("/acme/issues");
+    });
+
+    it("inserts right of a mid-strip opener", () => {
+      const store = useTabStore.getState();
+      store.switchWorkspace("acme"); // A
+      store.addTab("/acme/projects", "B");
+      store.addTab("/acme/skills", "C");
+      const bId = useTabStore.getState().byWorkspace.acme.tabs[1].id;
+      store.setActiveTab(bId);
+
+      store.openTab("/acme/issues/d", "D", { activate: true });
+      const s = useTabStore.getState();
+      expect(urls()).toEqual([
+        "/acme/issues",
+        "/acme/projects",
+        "/acme/issues/d",
+        "/acme/skills",
+      ]);
+      expect(getActiveTab(s)?.url).toBe("/acme/issues/d"); // foreground open
+    });
+
+    it("a pinned opener's 'right' is the start of the unpinned zone", () => {
+      const store = useTabStore.getState();
+      store.switchWorkspace("acme"); // A
+      store.addTab("/acme/projects", "B");
+      const aId = useTabStore.getState().byWorkspace.acme.tabs[0].id;
+      store.togglePin(aId); // [A(pinned, active), B]
+
+      store.openTab("/acme/issues/d", "D");
+      const s = useTabStore.getState();
+      expect(urls()).toEqual(["/acme/issues", "/acme/issues/d", "/acme/projects"]);
+      expect(s.byWorkspace.acme.tabs[0].pinned).toBe(true);
+      expect(s.byWorkspace.acme.tabs[1].pinned).toBe(false);
+    });
+
+    it("the explicit new-tab button (addTab) still appends", () => {
+      const store = useTabStore.getState();
+      store.switchWorkspace("acme"); // A active
+      store.addTab("/acme/projects", "B");
+      store.addTab("/acme/skills", "C"); // active is still A — must append anyway
+      expect(urls()).toEqual(["/acme/issues", "/acme/projects", "/acme/skills"]);
+    });
+
+    it("a dedupe hit focuses the existing tab without reordering", () => {
+      const store = useTabStore.getState();
+      store.switchWorkspace("acme"); // A active
+      store.addTab("/acme/projects", "B");
+      store.addTab("/acme/skills", "C");
+
+      store.openTab("/acme/skills", "C again"); // hits C, at the far end
+      const s = useTabStore.getState();
+      expect(urls()).toEqual(["/acme/issues", "/acme/projects", "/acme/skills"]);
+      expect(getActiveTab(s)?.url).toBe("/acme/skills");
+    });
+  });
+
   it("closeTab on the last tab in a workspace reseeds the default tab", () => {
     const store = useTabStore.getState();
     store.switchWorkspace("acme");

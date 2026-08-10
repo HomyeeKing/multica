@@ -535,12 +535,29 @@ export const useTabStore = create<TabStore>()(
         }
 
         const tab = makeSession(clean, title);
+        // Insert immediately right of the opener (the active tab) — browser
+        // convention for cmd/middle/menu opens (MUL-5860) — rather than
+        // appending. The pinned-first invariant caps the left edge: a pinned
+        // opener's "right" is the start of the unpinned zone. The explicit
+        // "+" button appends instead (see addTab).
+        const activeIndex = group.tabs.findIndex(
+          (t) => t.id === group.activeTabId,
+        );
+        const insertAt =
+          activeIndex >= 0
+            ? Math.max(activeIndex + 1, pinnedBoundary(group.tabs))
+            : group.tabs.length;
+        const nextTabs = [
+          ...group.tabs.slice(0, insertAt),
+          tab,
+          ...group.tabs.slice(insertAt),
+        ];
         set({
           byWorkspace: {
             ...byWorkspace,
             [activeWorkspaceSlug]: reconcileGroup(
               group,
-              [...group.tabs, tab],
+              nextTabs,
               opts?.activate === true ? tab.id : group.activeTabId,
             ),
           },

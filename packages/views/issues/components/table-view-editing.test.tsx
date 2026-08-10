@@ -423,6 +423,41 @@ describe("TableView cell editors under data refresh", () => {
     expect(navigationMocks.push).not.toHaveBeenCalled();
   });
 
+  it("middle click on an interactive cell does not trigger row navigation", async () => {
+    serverIssues = [makeIssue("a", "Alpha task", "todo")];
+
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <Harness
+          childProgressMap={new Map()}
+          surfaceKey={`test-aux-cells-${Math.floor(Math.random() * 1e9)}`}
+        />
+      </QueryClientProvider>,
+    );
+
+    const row = (await screen.findByText("MUL-a")).closest("tr")!;
+    const auxClick = (el: HTMLElement) =>
+      el.dispatchEvent(
+        new MouseEvent("auxclick", { bubbles: true, button: 1, cancelable: true }),
+      );
+
+    // Status cell trigger (interactive) — must NOT bubble into a row open.
+    auxClick(within(row).getByRole("button", { name: /Todo/ }));
+    expect(navigationMocks.openInNewTab).not.toHaveBeenCalled();
+    expect(navigationMocks.push).not.toHaveBeenCalled();
+
+    // Row checkbox — same.
+    auxClick(within(row).getByRole("checkbox"));
+    expect(navigationMocks.openInNewTab).not.toHaveBeenCalled();
+
+    // Dead space on the row still opens a background tab on middle click.
+    auxClick(row);
+    expect(navigationMocks.openInNewTab).toHaveBeenCalledWith(
+      "/test/issues/a",
+      "MUL-a",
+    );
+  });
+
   it("without a tab adapter (web), plain click pushes and a modifier click opens a browser tab", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     const windowOpen = vi.fn();
