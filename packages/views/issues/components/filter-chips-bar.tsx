@@ -352,7 +352,7 @@ function useFilterChips(
         emojis.length > 0 ? (
           <IconStack>
             {emojis.slice(0, 3).map((emoji, i) => (
-              <span key={i} className="text-[9px] leading-none">{emoji}</span>
+              <span key={i} className="text-micro leading-none">{emoji}</span>
             ))}
           </IconStack>
         ) : undefined,

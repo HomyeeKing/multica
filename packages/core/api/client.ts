@@ -3128,7 +3128,10 @@ export class ApiClient {
 
   // Pins
   async listPins(): Promise<PinnedItem[]> {
-    return this.fetch("/api/pins");
+    // include=view is the capability opt-in: the server withholds view pins
+    // from clients that don't declare support (old builds treated any
+    // non-issue pin as a project pin and auto-deleted it on 404).
+    return this.fetch("/api/pins?include=view");
   }
 
   async createPin(data: CreatePinRequest): Promise<PinnedItem> {

@@ -15,7 +15,15 @@ WHERE workspace_id = $1
   AND scope_type = $2
   AND scope_id IS NOT DISTINCT FROM sqlc.narg('scope_id')::uuid
   AND (owner_id = $3 OR visibility = 'workspace')
-ORDER BY created_at ASC;
+ORDER BY created_at ASC
+-- Hard response cap: the bar/panel are not built for more than this, and
+-- every row carries full query/display JSON. The create quota keeps real
+-- data far below it; the LIMIT is the abuse backstop.
+LIMIT 200;
+
+-- name: CountIssueViewsByOwner :one
+SELECT COUNT(*) FROM issue_view
+WHERE workspace_id = $1 AND owner_id = $2;
 
 -- name: GetIssueView :one
 -- Defense-in-depth: workspace_id is a SQL-layer tenant guard. Authorization
@@ -48,3 +56,14 @@ RETURNING id;
 -- transaction so project views never outlive their surface.
 DELETE FROM issue_view
 WHERE workspace_id = $1 AND scope_type = 'project' AND scope_id = $2;
+
+-- name: DeletePrivateIssueViewsByOwner :exec
+-- Member removal: a departed member's private views are unreachable by every
+-- remaining member while still consuming their quota — same rule as private
+-- quick actions. Shared views are workspace furniture and survive.
+DELETE FROM issue_view
+WHERE workspace_id = $1 AND owner_id = $2 AND visibility = 'private';
+
+-- name: DeleteIssueViewPreferencesByUser :exec
+DELETE FROM issue_view_preference
+WHERE workspace_id = $1 AND user_id = $2;

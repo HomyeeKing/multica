@@ -339,8 +339,10 @@ function PinRow({
     return (
       <SortablePinItem
         pin={pin}
-        // ?view= keeps a web reload on the view (the URL-sync hook adopts
-        // it on mount); the desktop router ignores the query harmlessly.
+        // ?view= keeps a web reload on the view for the surfaces that mount
+        // the URL-sync hook (/issues, /my-issues). Project pages don't sync
+        // yet — there the query is inert and reload falls back to the plain
+        // page; click-through activation still works everywhere.
         href={`${viewPath}?view=${view.id}`}
         pathname={pathname}
         onUnpin={onUnpin}

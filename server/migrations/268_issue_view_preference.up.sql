@@ -5,7 +5,7 @@
 -- last-write-wins, no revision. scope_id is backfilled (workspace id for
 -- workspace scope, user id for my scope, project id for project scope) so
 -- the composite primary key never depends on NULL. No FKs by repository
--- policy; member-removal cleanup deletes these rows in application code.
+-- policy; the member-revoke transaction deletes these rows explicitly.
 CREATE TABLE issue_view_preference (
     workspace_id UUID NOT NULL,
     user_id UUID NOT NULL,

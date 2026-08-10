@@ -1910,7 +1910,7 @@ export function IssueDisplayControls({
                     <span className="block text-caption font-medium text-muted-foreground">
                       {t(($) => $.table.hierarchy)}
                     </span>
-                    <span className="block text-caption text-muted-foreground/70">
+                    <span className="block text-caption text-faint-foreground">
                       {t(($) => $.table.hierarchy_description)}
                     </span>
                   </span>

@@ -401,7 +401,7 @@ function DraftDefinitionFields() {
                 </div>
               </div>
             )}
-            <p className="text-caption text-muted-foreground/70">
+            <p className="text-caption text-faint-foreground">
               {t(($) => $.save_view.default_hint)}
             </p>
           </div>

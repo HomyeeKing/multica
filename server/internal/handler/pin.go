@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -65,8 +66,19 @@ func (h *Handler) ListPins(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capability opt-in: clients built before saved views classified every
+	// non-issue pin as a project pin, fetched its detail, got 404, and
+	// permanently auto-unpinned it. Exposing item_type=view through the old
+	// contract would let an old Desktop DESTROY the user's view pins just by
+	// opening the sidebar — so view rows only ship to clients that declare
+	// they understand them (?include=view).
+	includeViews := strings.Contains(r.URL.Query().Get("include"), "view")
+
 	resp := make([]PinnedItemResponse, 0, len(pins))
 	for _, p := range pins {
+		if p.ItemType == "view" && !includeViews {
+			continue
+		}
 		resp = append(resp, pinnedItemToResponse(p))
 	}
 	writeJSON(w, http.StatusOK, resp)

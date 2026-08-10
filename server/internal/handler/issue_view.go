@@ -19,6 +19,14 @@ import (
 
 const issueViewNameMaxLen = 80
 
+// issueViewBodyMaxBytes bounds every saved-view write. The query/display
+// blobs are filter documents — real ones are a few KB; the cap is the
+// abuse backstop, comfortably above any legitimate payload.
+const issueViewBodyMaxBytes = 128 * 1024
+
+// issueViewsPerOwnerMax bounds table growth per member per workspace.
+const issueViewsPerOwnerMax = 100
+
 var (
 	validIssueViewScopeTypes        = []string{"workspace", "my", "project"}
 	validIssueViewMyVariants        = []string{"assigned", "created", "involved", "any"}
@@ -93,7 +101,12 @@ func canReadIssueView(v db.IssueView, userID pgtype.UUID) bool {
 
 func isJSONObject(raw json.RawMessage) bool {
 	var m map[string]json.RawMessage
-	return json.Unmarshal(raw, &m) == nil
+	if json.Unmarshal(raw, &m) != nil {
+		return false
+	}
+	// JSON null unmarshals into a nil map without error — reject it here
+	// instead of letting the DB CHECK turn it into a 500.
+	return m != nil
 }
 
 type CreateIssueViewRequest struct {
@@ -118,12 +131,25 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req CreateIssueViewRequest
+	r.Body = http.MaxBytesReader(w, r.Body, issueViewBodyMaxBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if l := len([]rune(req.Name)); l < 1 || l > issueViewNameMaxLen {
 		writeError(w, http.StatusBadRequest, "name must be between 1 and 80 characters")
+		return
+	}
+	ownedCount, err := h.Queries.CountIssueViewsByOwner(r.Context(), db.CountIssueViewsByOwnerParams{
+		WorkspaceID: wsUUID,
+		OwnerID:     parseUUID(userID),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check view quota")
+		return
+	}
+	if ownedCount >= issueViewsPerOwnerMax {
+		writeError(w, http.StatusBadRequest, "view limit reached for this workspace")
 		return
 	}
 	if !contains(validIssueViewScopeTypes, req.ScopeType) {
@@ -320,6 +346,7 @@ func (h *Handler) UpdateIssueView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req UpdateIssueViewRequest
+	r.Body = http.MaxBytesReader(w, r.Body, issueViewBodyMaxBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return

@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countIssueViewsByOwner = `-- name: CountIssueViewsByOwner :one
+SELECT COUNT(*) FROM issue_view
+WHERE workspace_id = $1 AND owner_id = $2
+`
+
+type CountIssueViewsByOwnerParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) CountIssueViewsByOwner(ctx context.Context, arg CountIssueViewsByOwnerParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countIssueViewsByOwner, arg.WorkspaceID, arg.OwnerID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createIssueView = `-- name: CreateIssueView :one
 INSERT INTO issue_view (
     workspace_id, owner_id, name, scope_type, scope_id, scope_variant,
@@ -84,6 +101,21 @@ func (q *Queries) DeleteIssueView(ctx context.Context, arg DeleteIssueViewParams
 	return id, err
 }
 
+const deleteIssueViewPreferencesByUser = `-- name: DeleteIssueViewPreferencesByUser :exec
+DELETE FROM issue_view_preference
+WHERE workspace_id = $1 AND user_id = $2
+`
+
+type DeleteIssueViewPreferencesByUserParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) DeleteIssueViewPreferencesByUser(ctx context.Context, arg DeleteIssueViewPreferencesByUserParams) error {
+	_, err := q.db.Exec(ctx, deleteIssueViewPreferencesByUser, arg.WorkspaceID, arg.UserID)
+	return err
+}
+
 const deleteIssueViewsByProjectScope = `-- name: DeleteIssueViewsByProjectScope :exec
 DELETE FROM issue_view
 WHERE workspace_id = $1 AND scope_type = 'project' AND scope_id = $2
@@ -98,6 +130,24 @@ type DeleteIssueViewsByProjectScopeParams struct {
 // transaction so project views never outlive their surface.
 func (q *Queries) DeleteIssueViewsByProjectScope(ctx context.Context, arg DeleteIssueViewsByProjectScopeParams) error {
 	_, err := q.db.Exec(ctx, deleteIssueViewsByProjectScope, arg.WorkspaceID, arg.ScopeID)
+	return err
+}
+
+const deletePrivateIssueViewsByOwner = `-- name: DeletePrivateIssueViewsByOwner :exec
+DELETE FROM issue_view
+WHERE workspace_id = $1 AND owner_id = $2 AND visibility = 'private'
+`
+
+type DeletePrivateIssueViewsByOwnerParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
+}
+
+// Member removal: a departed member's private views are unreachable by every
+// remaining member while still consuming their quota — same rule as private
+// quick actions. Shared views are workspace furniture and survive.
+func (q *Queries) DeletePrivateIssueViewsByOwner(ctx context.Context, arg DeletePrivateIssueViewsByOwnerParams) error {
+	_, err := q.db.Exec(ctx, deletePrivateIssueViewsByOwner, arg.WorkspaceID, arg.OwnerID)
 	return err
 }
 
@@ -142,6 +192,7 @@ WHERE workspace_id = $1
   AND scope_id IS NOT DISTINCT FROM $4::uuid
   AND (owner_id = $3 OR visibility = 'workspace')
 ORDER BY created_at ASC
+LIMIT 200
 `
 
 type ListIssueViewsForUserParams struct {
@@ -154,6 +205,9 @@ type ListIssueViewsForUserParams struct {
 // One surface's selector list: the caller's own views plus workspace-shared
 // ones, for a single (scope_type, scope_id) container. scope_id is NULL for
 // workspace and my scopes, so compare NULL-safely.
+// Hard response cap: the bar/panel are not built for more than this, and
+// every row carries full query/display JSON. The create quota keeps real
+// data far below it; the LIMIT is the abuse backstop.
 func (q *Queries) ListIssueViewsForUser(ctx context.Context, arg ListIssueViewsForUserParams) ([]IssueView, error) {
 	rows, err := q.db.Query(ctx, listIssueViewsForUser,
 		arg.WorkspaceID,
