@@ -24,7 +24,9 @@ import { Layers,
   Check,
   SquarePen,
   X,
+  ExternalLink,
 } from "lucide-react";
+import { openExternal } from "../platform";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
@@ -419,7 +421,7 @@ interface AppSidebarProps {
 
 export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }: AppSidebarProps = {}) {
   const { t } = useT("layout");
-  const { pathname, push } = useNavigation();
+  const { pathname, push, getShareableUrl } = useNavigation();
   const user = useAuthStore((s) => s.user);
   const userId = useAuthStore((s) => s.user?.id);
   const logout = useLogout();
@@ -661,6 +663,29 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                         {ws.id === workspace?.id && (
                           <Check className="h-3.5 w-3.5 text-primary" />
                         )}
+                        {/* Open this workspace in a separate window. On desktop
+                            this hands the shareable URL to the OS (a new native
+                            window); on web it opens a new browser window. The
+                            row itself still navigates in place — this button
+                            stops that so the two gestures never collide. */}
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={<button type="button" aria-label={t(($) => $.sidebar.open_in_new_window)} />}
+                            className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/dropdown-menu-item:opacity-100 group-focus/dropdown-menu-item:opacity-100"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openExternal(
+                                getShareableUrl(paths.workspace(ws.slug).issues()),
+                              );
+                            }}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" sideOffset={4}>
+                            {t(($) => $.sidebar.open_in_new_window)}
+                          </TooltipContent>
+                        </Tooltip>
                       </DropdownMenuItem>
                     ))}
                     {!workspaceCreationDisabled && (

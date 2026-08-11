@@ -43,6 +43,7 @@
     "unpin_tooltip": "고정 해제",
     "workspaces_label": "워크스페이스",
     "create_workspace": "워크스페이스 만들기",
+    "open_in_new_window": "새 창에서 열기",
     "pending_invitations_label": "대기 중인 초대",
     "invitation_workspace_fallback": "워크스페이스",
     "invitation_join": "참가",

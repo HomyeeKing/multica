@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
 import { AppSidebar } from "./app-sidebar";
 
-const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
+const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, navigation, openExternal, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
   appForeground: { current: true },
   sidebarState: { setOpenMobile: vi.fn() },
   chatSessions: { current: [] as { id?: string; unread_count?: number }[] },
@@ -12,6 +12,7 @@ const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, n
   deletePin: vi.fn(),
   inboxItems: { current: [] as { id: string; read: boolean }[] },
   navigation: { current: { pathname: "/acme/issues" } },
+  openExternal: vi.fn(),
   summary: { current: [] as { workspace_id: string; count: number }[] },
   workspaces: {
     current: [] as { id: string; name: string; slug: string; avatar_url: string | null }[],
@@ -87,7 +88,19 @@ vi.mock("@multica/ui/components/ui/collapsible", () => ({
 vi.mock("@multica/ui/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <button type="button">{children}</button>,
+  TooltipTrigger: ({
+    children,
+    onClick,
+    render,
+  }: {
+    children?: React.ReactNode;
+    onClick?: (e: React.MouseEvent) => void;
+    render?: React.ReactElement<{ "aria-label"?: string }>;
+  }) => (
+    <button type="button" aria-label={render?.props["aria-label"]} onClick={onClick}>
+      {children}
+    </button>
+  ),
 }));
 vi.mock("../common/use-app-foreground", () => ({
   useAppForeground: () => appForeground.current,
@@ -97,8 +110,13 @@ vi.mock("../auth", () => ({ useLogout: () => vi.fn() }));
 vi.mock("../issues/components/status-icon", () => ({ StatusIcon: () => <span /> }));
 vi.mock("../navigation", () => ({
   AppLink: ({ children, href }: { children: React.ReactNode; href: string }) => <a href={href}>{children}</a>,
-  useNavigation: () => ({ pathname: navigation.current.pathname, push: vi.fn() }),
+  useNavigation: () => ({
+    pathname: navigation.current.pathname,
+    push: vi.fn(),
+    getShareableUrl: (path: string) => `https://app.multica.test${path}`,
+  }),
 }));
+vi.mock("../platform", () => ({ openExternal }));
 vi.mock("../projects/components/project-icon", () => ({ ProjectIcon: () => <span /> }));
 vi.mock("../workspace/workspace-avatar", () => ({ WorkspaceAvatar: () => <span /> }));
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({ ActorAvatar: () => <span /> }));
@@ -330,6 +348,36 @@ describe("workspace-switcher dropdown per-workspace dot", () => {
     summary.current = [{ workspace_id: "ws-1", count: 5 }];
     const { container } = render(<AppSidebar />);
     expect(rowDots(container)).toHaveLength(0);
+  });
+});
+
+describe("workspace-switcher open-in-new-window", () => {
+  beforeEach(() => {
+    openExternal.mockReset();
+    summary.current = [];
+    workspaces.current = [
+      { id: "ws-1", name: "Active WS", slug: "active", avatar_url: null },
+      { id: "ws-2", name: "Other WS", slug: "other", avatar_url: null },
+    ];
+  });
+
+  // The control is the ExternalLink icon; i18n isn't wired in this file, so we
+  // key off the stable lucide class rather than the (empty) translated label.
+  const openButtons = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll(".lucide-external-link")).map(
+      (svg) => svg.closest("button")!,
+    );
+
+  it("gives every workspace row an open-in-new-window control", () => {
+    const { container } = render(<AppSidebar />);
+    expect(openButtons(container)).toHaveLength(2);
+  });
+
+  it("opens the workspace's shareable URL externally without navigating", () => {
+    const { container } = render(<AppSidebar />);
+    fireEvent.click(openButtons(container)[1]!);
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    expect(openExternal).toHaveBeenCalledWith("https://app.multica.test/other/issues");
   });
 });
 
