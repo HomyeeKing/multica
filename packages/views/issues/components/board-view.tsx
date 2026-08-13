@@ -43,7 +43,7 @@ import type {
   IssueGroupPageState,
 } from "../surface/use-issue-group-branches";
 import { useDragSettle } from "./use-drag-settle";
-import { useRightButtonPan } from "./use-right-button-pan";
+import { useBoardDragPan } from "./use-board-drag-pan";
 import { useT } from "../../i18n";
 import {
   type DragMoveUpdates,
@@ -394,8 +394,9 @@ function BoardViewImpl({
     })
   );
 
-  // HOM-9: hold the right mouse button and move to pan the board horizontally.
-  const pan = useRightButtonPan<HTMLDivElement>();
+  // #6700: drag empty board background with the left button to pan horizontally
+  // (Trello/Linear). Card drags start on `[data-board-card]` and are ignored.
+  const pan = useBoardDragPan<HTMLDivElement>();
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
@@ -562,8 +563,11 @@ function BoardViewImpl({
     >
       <div
         ref={pan.ref}
-        onMouseDown={pan.onMouseDown}
-        onContextMenu={pan.onContextMenu}
+        onPointerDown={pan.onPointerDown}
+        onPointerMove={pan.onPointerMove}
+        onPointerUp={pan.onPointerUp}
+        onPointerCancel={pan.onPointerCancel}
+        onLostPointerCapture={pan.onLostPointerCapture}
         className="flex flex-1 min-h-0 gap-4 overflow-x-auto p-2"
       >
         {groups.length === 0 ? (

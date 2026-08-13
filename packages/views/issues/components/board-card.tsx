@@ -362,6 +362,7 @@ export const DraggableBoardCard = memo(function DraggableBoardCard({
       <div
         ref={setNodeRef}
         style={style}
+        data-board-card=""
         {...attributes}
         {...listeners}
         className={`group/card ${isDragging ? "opacity-30" : ""}`}
