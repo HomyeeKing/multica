@@ -11,7 +11,6 @@ function Harness() {
     <div
       data-testid="scroller"
       ref={pan.ref}
-      style={pan.style}
       onPointerDown={pan.onPointerDown}
       onPointerMove={pan.onPointerMove}
       onPointerUp={pan.onPointerUp}
@@ -41,15 +40,32 @@ function stubCapture(el: HTMLElement, scrollWidth = 1000, clientWidth = 300) {
   return { captured, released };
 }
 
-function down(target: Element, x: number, button = 0) {
-  fireEvent.pointerDown(target, { button, clientX: x, clientY: 50, pointerId: 1 });
+function down(target: Element, x: number, button = 0, pointerType = "mouse") {
+  fireEvent.pointerDown(target, {
+    button,
+    clientX: x,
+    clientY: 50,
+    pointerId: 1,
+    pointerType,
+  });
 }
 // `buttons: 1` = left button held — the real browser value during a left drag.
 function move(target: Element, x: number, buttons = 1) {
-  fireEvent.pointerMove(target, { clientX: x, clientY: 50, pointerId: 1, buttons });
+  fireEvent.pointerMove(target, {
+    clientX: x,
+    clientY: 50,
+    pointerId: 1,
+    pointerType: "mouse",
+    buttons,
+  });
 }
 function up(target: Element) {
-  fireEvent.pointerUp(target, { clientX: 0, clientY: 50, pointerId: 1 });
+  fireEvent.pointerUp(target, {
+    clientX: 0,
+    clientY: 50,
+    pointerId: 1,
+    pointerType: "mouse",
+  });
 }
 
 describe("useBoardDragPan", () => {
@@ -150,7 +166,13 @@ describe("useBoardDragPan", () => {
 
     down(getByTestId("blank"), 200);
     move(el, 220); // activate
-    fireEvent.pointerMove(el, { clientX: 220, clientY: 400, pointerId: 1, buttons: 1 });
+    fireEvent.pointerMove(el, {
+      clientX: 220,
+      clientY: 400,
+      pointerId: 1,
+      pointerType: "mouse",
+      buttons: 1,
+    });
     expect(el.scrollTop).toBe(topBefore);
   });
 
@@ -227,9 +249,54 @@ describe("useBoardDragPan", () => {
     expect(fireSelectStart()).toBe(true); // released after gesture end
   });
 
-  it("sets touch-action: pan-y on the container (P1-2)", () => {
+  it("does not set touch-action because touch/pen stay browser-owned", () => {
     const { getByTestId } = render(<Harness />);
-    expect(getByTestId("scroller").style.touchAction).toBe("pan-y");
+    expect(getByTestId("scroller").style.touchAction).toBe("");
+  });
+
+  it("ignores touch and pen pointerdown entirely (mouse-only scope)", () => {
+    const { getByTestId } = render(<Harness />);
+    const el = getByTestId("scroller");
+    const { captured } = stubCapture(el);
+    el.scrollLeft = 100;
+
+    const touchDown = fireEvent.pointerDown(getByTestId("blank"), {
+      button: 0,
+      clientX: 200,
+      clientY: 50,
+      pointerId: 11,
+      pointerType: "touch",
+    });
+    expect(touchDown).toBe(true);
+    expect(captured).toEqual([]);
+    expect(el.style.userSelect).toBe("");
+    fireEvent.pointerMove(el, {
+      clientX: 260,
+      clientY: 50,
+      pointerId: 11,
+      pointerType: "touch",
+      buttons: 1,
+    });
+    expect(el.scrollLeft).toBe(100);
+
+    const penDown = fireEvent.pointerDown(getByTestId("blank"), {
+      button: 0,
+      clientX: 200,
+      clientY: 50,
+      pointerId: 12,
+      pointerType: "pen",
+    });
+    expect(penDown).toBe(true);
+    expect(captured).toEqual([]);
+    expect(el.style.userSelect).toBe("");
+    fireEvent.pointerMove(el, {
+      clientX: 260,
+      clientY: 50,
+      pointerId: 12,
+      pointerType: "pen",
+      buttons: 1,
+    });
+    expect(el.scrollLeft).toBe(100);
   });
 
   it("captures the pointer on pointerdown (before any move) so exit can't lose it", () => {
@@ -256,9 +323,21 @@ describe("useBoardDragPan", () => {
     // Pointer moves outside the container bounds. Because it's captured on
     // pointerdown, the events still target `el` and we keep following clientX.
     // Nothing pulls scrollLeft back toward the start.
-    fireEvent.pointerMove(el, { clientX: 260, clientY: 5000, pointerId: 1, buttons: 1 });
+    fireEvent.pointerMove(el, {
+      clientX: 260,
+      clientY: 5000,
+      pointerId: 1,
+      pointerType: "mouse",
+      buttons: 1,
+    });
     expect(el.scrollLeft).toBe(240); // 280 - 40, monotonic follow, no bounce
-    fireEvent.pointerMove(el, { clientX: 300, clientY: 5000, pointerId: 1, buttons: 1 });
+    fireEvent.pointerMove(el, {
+      clientX: 300,
+      clientY: 5000,
+      pointerId: 1,
+      pointerType: "mouse",
+      buttons: 1,
+    });
     expect(el.scrollLeft).toBe(200); // 240 - 40, still following
 
     up(el);

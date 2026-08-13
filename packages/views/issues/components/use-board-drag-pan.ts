@@ -39,7 +39,8 @@ const INTERACTIVE_SELECTOR = [
  * background and dragging pans the board horizontally — the page follows the
  * cursor. Dragging a card still moves the card (dnd-kit); this hook stays out
  * of the way because it never activates when the gesture starts on a card or
- * any interactive element.
+ * any interactive element. Touch and pen input are intentionally left to the
+ * browser; this PR only owns the left-mouse-button gesture.
  *
  * ### dnd-kit coexistence invariant (P2-5 — do not break)
  * These pointer handlers sit on the SAME scroll container that hosts the
@@ -64,9 +65,9 @@ const INTERACTIVE_SELECTOR = [
  *     the window where Safari/Firefox would start a selection whose auto-scroll
  *     yanks the board back. Because selection can no longer begin, `pointermove`
  *     no longer needs a per-frame `removeAllRanges` (P3-7).
- *   - Left button only (`event.button === 0`). Right/middle are untouched, so
- *     the native context menu is never suppressed and the earlier
- *     `mousedown → contextmenu → mousemove` ordering problem cannot occur.
+ *   - Mouse left button only (`event.pointerType === "mouse"` and
+ *     `event.button === 0`). Touch/pen are untouched so native touch scrolling
+ *     and pinch zoom stay browser-owned.
  *   - Activation is gated on a ~5px move so a plain click is not swallowed.
  *   - Panning uses the captured pointer's `clientX` deltas — never a hover
  *     target or `elementFromPoint` — so leaving the container can't lose track.
@@ -76,12 +77,6 @@ const INTERACTIVE_SELECTOR = [
  *   - Cleanup on `pointerup` / `pointercancel` / `lostpointercapture` and
  *     window `blur`, plus a `buttons` check on move, so a lost release cannot
  *     leave the board stuck in a panning state.
- *
- * The container must also carry `touch-action: pan-y` (P1-2) so touchpad/touch
- * horizontal gestures don't run a parallel native scroll that fights our
- * `scrollLeft` and fires `pointercancel`; we take over the horizontal axis and
- * leave vertical to the browser. That style is applied where the props are
- * spread (see `board-view.tsx`).
  *
  * Returns props to spread onto the scroll container.
  */
@@ -120,9 +115,9 @@ export function useBoardDragPan<T extends HTMLElement>() {
   }, []);
 
   const onPointerDown = useCallback((event: React.PointerEvent<T>) => {
-    // Left button only. `button === 0` covers mouse-left and the primary
-    // touch/pen contact.
-    if (event.button !== 0) return;
+    // Left mouse button only. Primary touch/pen also report button === 0, but
+    // this board gesture is intentionally scoped to mouse input.
+    if (event.pointerType !== "mouse" || event.button !== 0) return;
     const el = ref.current;
     if (!el) return;
     // Ignore gestures that begin on a card or interactive control — those
@@ -215,10 +210,6 @@ export function useBoardDragPan<T extends HTMLElement>() {
 
   return {
     ref,
-    // `touch-action: pan-y` (P1-2): we own the horizontal axis; leave vertical
-    // scrolling to the browser and stop it from running a parallel native
-    // horizontal gesture that would fight us and fire pointercancel.
-    style: { touchAction: "pan-y" } as const,
     onPointerDown,
     onPointerMove,
     onPointerUp,
