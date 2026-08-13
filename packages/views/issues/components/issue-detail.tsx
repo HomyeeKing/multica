@@ -1548,31 +1548,18 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   useEffect(() => {
     if (!pendingPostedCommentId) return;
 
-    // A newly appended row can be outside Virtuoso's mounted window. First
-    // move the virtual list to the containing top-level row so it materializes
-    // (a reply lives inside its root CommentCard), then align the exact DOM
-    // anchor once measurement has completed. The minimap only observes these
-    // anchors; it does not own or block scrolling.
+    // Match the minimap's single-scroll behavior. A reply lives inside its
+    // root CommentCard, so scrolling the containing top-level row to the end
+    // both materializes it and keeps Virtuoso as the sole scroll controller.
+    // Following this with native scrollIntoView would interrupt Virtuoso's
+    // smooth scroll and can leave the card only partially visible.
     const rootId = replyToRoot.get(pendingPostedCommentId) ?? pendingPostedCommentId;
     const index = items.findIndex((item) => item.id === rootId);
     if (index < 0) return;
     if (!isFlatTimeline) {
       virtuosoRef.current?.scrollToIndex({ index, align: "end" });
     }
-
-    let frame = 0;
-    let attempts = 0;
-    const alignExactComment = () => {
-      const target = document.getElementById(`comment-${pendingPostedCommentId}`);
-      if (target) {
-        target.scrollIntoView({ behavior: "smooth", block: "end" });
-        setPendingPostedCommentId(null);
-        return;
-      }
-      if (++attempts < 12) frame = requestAnimationFrame(alignExactComment);
-    };
-    frame = requestAnimationFrame(alignExactComment);
-    return () => cancelAnimationFrame(frame);
+    setPendingPostedCommentId(null);
   }, [pendingPostedCommentId, items, replyToRoot, isFlatTimeline]);
   const jumpFlashTimerRef = useRef<number | null>(null);
   useEffect(

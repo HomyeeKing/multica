@@ -434,6 +434,7 @@ vi.mock("@multica/core/issues/stores", async () => ({
 // background instead, which is mechanism-independent and observable without
 // layout.
 const scrollIntoViewSpy = vi.hoisted(() => vi.fn());
+const scrollToIndexSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: forwardRef(function MockVirtuoso(
@@ -445,7 +446,7 @@ vi.mock("react-virtuoso", () => ({
       // since the deep-link cold-path drives the container's scrollTop on the
       // real DOM node, not Virtuoso's imperative API.
       scrollIntoView: vi.fn(),
-      scrollToIndex: vi.fn(),
+      scrollToIndex: scrollToIndexSpy,
     }));
     return (
       <div data-testid="virtuoso-mock">
@@ -461,6 +462,7 @@ vi.mock("react-virtuoso", () => ({
 // with a spy so the deep-link effect's call can be observed.
 beforeEach(() => {
   scrollIntoViewSpy.mockClear();
+  scrollToIndexSpy.mockClear();
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
     configurable: true,
     writable: true,
@@ -919,7 +921,7 @@ describe("IssueDetail (shared)", () => {
     expect(container.querySelector(".sticky.bottom-0")).toBeNull();
   });
 
-  it("scrolls the posted comment into view after sending", async () => {
+  it("scrolls the posted comment with the same Virtuoso path as the minimap", async () => {
     mockApiObj.createComment.mockResolvedValue({
       id: "comment-new",
       issue_id: "issue-1",
@@ -931,11 +933,6 @@ describe("IssueDetail (shared)", () => {
       created_at: "2026-08-13T00:00:00Z",
       updated_at: "2026-08-13T00:00:00Z",
     });
-    const scrollIntoView = vi.fn();
-    const target = document.createElement("div");
-    target.id = "comment-comment-new";
-    Object.defineProperty(target, "scrollIntoView", { value: scrollIntoView });
-    document.body.appendChild(target);
     renderIssueDetail();
 
     await screen.findByText("Implement authentication");
@@ -946,9 +943,9 @@ describe("IssueDetail (shared)", () => {
     fireEvent.click(within(composer).getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
-      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "end" });
+      expect(scrollToIndexSpy).toHaveBeenCalledWith({ index: 2, align: "end" });
     });
-    target.remove();
+    expect(scrollIntoViewSpy).not.toHaveBeenCalled();
   });
 
   it("reserves the chat launcher's corner at the end of the mobile scroll", async () => {
