@@ -217,13 +217,13 @@ function renderCommentInput(onSubmit = vi.fn().mockResolvedValue(true)) {
 }
 
 function renderReplyInput({
-  onSubmit = vi.fn().mockResolvedValue(true),
+  onSubmit = vi.fn().mockResolvedValue("reply-new"),
   onAccepted,
   size = "sm",
   draftKey,
 }: {
-  onSubmit?: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<boolean>;
-  onAccepted?: (target: HTMLElement) => void;
+  onSubmit?: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<string | boolean>;
+  onAccepted?: (commentId: string) => void;
   size?: "sm" | "default";
   draftKey?: `reply:${string}:${string}`;
 } = {}) {
@@ -513,7 +513,7 @@ describe("comment composers", () => {
     expect(focusCalls.blurred).toBe(0);
   });
 
-  it("reports the reply composer as the accepted scroll target", async () => {
+  it("reports the new reply id as the accepted scroll target", async () => {
     const onAccepted = vi.fn();
     const { container } = renderReplyInput({ onAccepted });
 
@@ -522,7 +522,7 @@ describe("comment composers", () => {
     fireEvent.click(getSubmitButton(container));
 
     await waitFor(() => expect(onAccepted).toHaveBeenCalledTimes(1));
-    expect(onAccepted.mock.calls[0]?.[0]).toBeInstanceOf(HTMLElement);
+    expect(onAccepted).toHaveBeenCalledWith("reply-new");
   });
 
   it("does not refocus the reply box when the send fails", async () => {

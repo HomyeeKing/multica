@@ -20,9 +20,9 @@ interface CommentInputProps {
   /** Resolves true on success, false on failure. The composer keeps the text
    *  (editor locked + button spinning) until this settles, then clears only on
    *  success — a failed send must not silently discard the user's draft. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<string | boolean>;
   /** Called after the server accepts the comment and the composer is cleared. */
-  onAccepted?: (target: HTMLElement) => void;
+  onAccepted?: (commentId: string) => void;
 }
 
 function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
@@ -30,7 +30,6 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
   const { t: tEditor } = useT("editor");
   const sendShortcut = useShortcut("send");
   const editorRef = useRef<ContentEditorRef>(null);
-  const composerRef = useRef<HTMLDivElement>(null);
   // Sending mid-upload would strip the pending image's blob URL out of the
   // markdown and bind no attachment id — the comment posts without the file.
   const uploadGate = useUploadGate(editorRef);
@@ -138,6 +137,7 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
   // leave a mid-flight draft in place: dropping the caret then would yank it
   // out of the sentence the user is still typing.
   const editorScrubbedRef = useRef(false);
+  const acceptedCommentIdRef = useRef<string | null>(null);
 
   const { submitting, submit } = useComposerSubmit({
     editorRef,
@@ -167,7 +167,10 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
         content,
         activeIds.length > 0 ? activeIds : undefined,
         suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-      );
+      ).then((commentId) => {
+        acceptedCommentIdRef.current = typeof commentId === "string" ? commentId : null;
+        return !!commentId;
+      });
     },
     onAccepted: () => {
       // Success may only consume the entry it submitted (MUL-5181 P0): edits
@@ -187,14 +190,13 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
       setIsEmpty(true);
       setSuppressedAgentIds(new Set());
       editorScrubbedRef.current = true;
-      if (composerRef.current) onAccepted?.(composerRef.current);
+      if (acceptedCommentIdRef.current) onAccepted?.(acceptedCommentIdRef.current);
     },
   });
 
   return (
     <div
       {...dropZoneProps}
-      ref={composerRef}
       className="relative flex flex-col rounded-lg bg-card pb-8 ring-1 ring-border"
     >
       {/* Lock the editor while the send is in flight. ContentEditor can't

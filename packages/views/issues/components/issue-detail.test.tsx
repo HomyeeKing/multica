@@ -932,6 +932,10 @@ describe("IssueDetail (shared)", () => {
       updated_at: "2026-08-13T00:00:00Z",
     });
     const scrollIntoView = vi.fn();
+    const target = document.createElement("div");
+    target.id = "comment-comment-new";
+    Object.defineProperty(target, "scrollIntoView", { value: scrollIntoView });
+    document.body.appendChild(target);
     renderIssueDetail();
 
     await screen.findByText("Implement authentication");
@@ -939,12 +943,12 @@ describe("IssueDetail (shared)", () => {
     const editor = await screen.findByPlaceholderText("Leave a comment...");
     fireEvent.change(editor, { target: { value: "A new update" } });
     const composer = editor.closest<HTMLElement>("[aria-busy], .relative.flex.flex-col.rounded-lg")!;
-    Object.defineProperty(composer, "scrollIntoView", { value: scrollIntoView });
     fireEvent.click(within(composer).getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
       expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "nearest" });
     });
+    target.remove();
   });
 
   it("reserves the chat launcher's corner at the end of the mobile scroll", async () => {

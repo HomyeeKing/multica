@@ -1192,14 +1192,16 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     },
     [restoreScrollRef],
   );
-  const scrollToTimelineBottom = useCallback((target: HTMLElement) => {
+  const scrollToTimelineBottom = useCallback((commentId: string) => {
     // The create-comment mutation updates the timeline before resolving, but
     // Virtuoso applies the new row's measured height on the next frame. The
-    // composer sits immediately after the newly posted comment/reply, so
-    // bringing it into view lands on the new message without forcing the
-    // whole document to its maximum scroll offset.
+    // new comment/reply itself is the precise target; scrolling the composer
+    // below it can leave a tall message partly outside the viewport.
     requestAnimationFrame(() => {
-      target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      document.getElementById(`comment-${commentId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
     });
   }, []);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
