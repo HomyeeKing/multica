@@ -29,6 +29,8 @@ interface ReplyInputProps {
   /** Resolves true on success, false on failure — the reply box keeps its text
    *  (locked + spinning) until then, clearing only on success. */
   onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<boolean>;
+  /** Called after the server accepts the reply and the composer is cleared. */
+  onAccepted?: (target: HTMLElement) => void;
   size?: "sm" | "default";
   /** When set, hydrates/persists the in-progress reply via the draft store.
    *  Required for replies inside virtualized timeline threads, where the
@@ -47,6 +49,7 @@ function ReplyInput({
   avatarType,
   avatarId,
   onSubmit,
+  onAccepted,
   size = "default",
   draftKey,
 }: ReplyInputProps) {
@@ -200,6 +203,7 @@ function ReplyInput({
       setIsEmpty(true);
       setSuppressedAgentIds(new Set());
       editorScrubbedRef.current = true;
+      if (composerRef.current) onAccepted?.(composerRef.current);
     },
   });
 

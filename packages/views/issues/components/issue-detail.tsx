@@ -1192,18 +1192,16 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     },
     [restoreScrollRef],
   );
-  const scrollToTimelineBottom = useCallback(() => {
+  const scrollToTimelineBottom = useCallback((target: HTMLElement) => {
     // The create-comment mutation updates the timeline before resolving, but
-    // Virtuoso applies the new row's measured height on the next frame. Wait
-    // for that commit, then scroll only this issue's container (native
-    // scrollIntoView can also move the surrounding desktop shell).
+    // Virtuoso applies the new row's measured height on the next frame. The
+    // composer sits immediately after the newly posted comment/reply, so
+    // bringing it into view lands on the new message without forcing the
+    // whole document to its maximum scroll offset.
     requestAnimationFrame(() => {
-      scrollContainerEl?.scrollTo({
-        top: scrollContainerEl.scrollHeight,
-        behavior: "smooth",
-      });
+      target.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
-  }, [scrollContainerEl]);
+  }, []);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   // User preference: pin the bottom comment bar to the scroll viewport. Off
   // below `md` regardless of the preference — see the hook.
@@ -2432,6 +2430,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             currentUserId={user?.id}
             canModerate={canModerateComments}
             onReply={submitReply}
+            onReplyAccepted={scrollToTimelineBottom}
             onEdit={editComment}
             onDelete={deleteComment}
             onToggleReaction={handleToggleReaction}

@@ -22,7 +22,7 @@ interface CommentInputProps {
    *  success — a failed send must not silently discard the user's draft. */
   onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<boolean>;
   /** Called after the server accepts the comment and the composer is cleared. */
-  onAccepted?: () => void;
+  onAccepted?: (target: HTMLElement) => void;
 }
 
 function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
@@ -30,6 +30,7 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
   const { t: tEditor } = useT("editor");
   const sendShortcut = useShortcut("send");
   const editorRef = useRef<ContentEditorRef>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
   // Sending mid-upload would strip the pending image's blob URL out of the
   // markdown and bind no attachment id — the comment posts without the file.
   const uploadGate = useUploadGate(editorRef);
@@ -186,13 +187,14 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
       setIsEmpty(true);
       setSuppressedAgentIds(new Set());
       editorScrubbedRef.current = true;
-      onAccepted?.();
+      if (composerRef.current) onAccepted?.(composerRef.current);
     },
   });
 
   return (
     <div
       {...dropZoneProps}
+      ref={composerRef}
       className="relative flex flex-col rounded-lg bg-card pb-8 ring-1 ring-border"
     >
       {/* Lock the editor while the send is in flight. ContentEditor can't

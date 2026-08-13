@@ -919,7 +919,7 @@ describe("IssueDetail (shared)", () => {
     expect(container.querySelector(".sticky.bottom-0")).toBeNull();
   });
 
-  it("scrolls the issue timeline to the bottom after posting a comment", async () => {
+  it("scrolls the posted comment into view after sending", async () => {
     mockApiObj.createComment.mockResolvedValue({
       id: "comment-new",
       issue_id: "issue-1",
@@ -931,22 +931,19 @@ describe("IssueDetail (shared)", () => {
       created_at: "2026-08-13T00:00:00Z",
       updated_at: "2026-08-13T00:00:00Z",
     });
-    const scrollTo = vi.fn();
-    const { container } = renderIssueDetail();
+    const scrollIntoView = vi.fn();
+    renderIssueDetail();
 
     await screen.findByText("Implement authentication");
-    const scrollContainer = container.querySelector("[data-tab-scroll-root]") as HTMLDivElement;
-    Object.defineProperty(scrollContainer, "scrollHeight", { value: 1200 });
-    Object.defineProperty(scrollContainer, "scrollTo", { value: scrollTo });
-
     fireEvent.click(screen.getByTestId("comment-composer-shell"));
     const editor = await screen.findByPlaceholderText("Leave a comment...");
     fireEvent.change(editor, { target: { value: "A new update" } });
     const composer = editor.closest<HTMLElement>("[aria-busy], .relative.flex.flex-col.rounded-lg")!;
+    Object.defineProperty(composer, "scrollIntoView", { value: scrollIntoView });
     fireEvent.click(within(composer).getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
-      expect(scrollTo).toHaveBeenCalledWith({ top: 1200, behavior: "smooth" });
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "nearest" });
     });
   });
 
