@@ -18,18 +18,25 @@ const INTERACTIVE_SELECTOR =
  * any interactive element.
  *
  * Design notes:
- *   - Pointer Events + pointer capture, so the drag keeps tracking even when
- *     the cursor leaves the element or the window.
+ *   - Pointer Events + pointer capture claimed on `pointerdown` (not deferred
+ *     to first move), so every `pointermove` keeps dispatching to the container
+ *     even after the pointer leaves it or the window. Deferring capture was the
+ *     "scrolls back when the pointer exits the board" bug: without an early
+ *     capture the browser ran a native selection-drag whose auto-scroll fought
+ *     `scrollLeft`, and re-entering the container produced a jumped delta.
+ *   - `preventDefault()` on `pointerdown` stops the native text/image drag from
+ *     starting at all, so no selection can auto-scroll the container.
  *   - Left button only (`event.button === 0`). Right/middle are untouched, so
  *     the native context menu is never suppressed and the earlier
  *     `mousedown → contextmenu → mousemove` ordering problem cannot occur.
  *   - Activation is gated on a ~5px move so a plain click is not swallowed.
+ *   - Panning uses the captured pointer's `clientX` deltas — never a hover
+ *     target or `elementFromPoint` — so leaving the container can't lose track.
  *   - Horizontal axis only: `deltaY` is never read, `scrollTop` never written.
  *     `scrollLeft` is clamped to `[0, scrollWidth - clientWidth]` so reaching an
  *     edge stops cleanly instead of bouncing back.
- *   - Native text selection is disabled while panning (`user-select: none` +
- *     range clear), so the drag neither highlights column text nor lets the
- *     selection auto-scroll fight the pan at the left edge.
+ *   - Native text selection is also disabled while panning (`user-select:
+ *     none` + range clear) as defense in depth.
  *   - Cleanup on `pointerup` / `pointercancel` / `lostpointercapture` and
  *     window `blur`, plus a `buttons` check on move, so a lost release cannot
  *     leave the board stuck in a panning state.
@@ -44,7 +51,6 @@ export function useBoardDragPan<T extends HTMLElement>() {
   const activeRef = useRef(false);
   const startXRef = useRef(0);
   const lastXRef = useRef(0);
-  const scrollStartRef = useRef(0);
 
   const reset = useCallback(() => {
     const el = ref.current;
@@ -81,7 +87,16 @@ export function useBoardDragPan<T extends HTMLElement>() {
     activeRef.current = false;
     startXRef.current = event.clientX;
     lastXRef.current = event.clientX;
-    scrollStartRef.current = el.scrollLeft;
+
+    // Claim the pointer immediately so subsequent moves keep coming to this
+    // element even once the cursor leaves the board, and stop the native
+    // selection/image drag before it can start its own auto-scroll.
+    try {
+      el.setPointerCapture(event.pointerId);
+    } catch {
+      /* capture unsupported/failed; window blur fallback still cleans up */
+    }
+    event.preventDefault();
   }, []);
 
   const onPointerMove = useCallback((event: React.PointerEvent<T>) => {
@@ -98,30 +113,21 @@ export function useBoardDragPan<T extends HTMLElement>() {
 
     if (!activeRef.current) {
       if (Math.abs(event.clientX - startXRef.current) < PAN_ACTIVATION_DISTANCE) return;
-      // Cross the threshold: begin panning, capture the pointer, show grab.
+      // Cross the threshold: begin panning. Pointer is already captured from
+      // pointerdown; just switch on the panning affordances.
       activeRef.current = true;
-      try {
-        el.setPointerCapture(event.pointerId);
-      } catch {
-        /* capture unsupported/failed; drag still works via window fallbacks */
-      }
       el.style.cursor = "grabbing";
-      // Suppress native text selection for the duration of the pan. Without
-      // this the drag selects the column/card text above; the selection's
-      // auto-scroll then fights our scrollLeft and yanks the board back toward
-      // the anchor when we reach the left edge (the "snaps back" bug).
       el.style.userSelect = "none";
       el.style.setProperty("-webkit-user-select", "none");
     }
 
-    // Clear any selection that the browser started before user-select took
-    // effect (the range created between pointerdown and activation).
+    // Clear any stray selection the browser may still have started.
     const selection =
       typeof window !== "undefined" ? window.getSelection?.() : null;
     if (selection && !selection.isCollapsed) selection.removeAllRanges();
 
-    // Horizontal axis only. Clamp to the scrollable range so hitting an edge
-    // simply stops rather than accumulating overscroll.
+    // Horizontal axis only, driven by captured-pointer clientX deltas. Clamp to
+    // the scrollable range so hitting an edge simply stops.
     const delta = event.clientX - lastXRef.current;
     lastXRef.current = event.clientX;
     const maxScroll = el.scrollWidth - el.clientWidth;

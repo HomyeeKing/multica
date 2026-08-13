@@ -26,12 +26,15 @@ function Harness() {
 }
 
 // jsdom lacks pointer-capture methods and doesn't lay out; stub capture and a
-// scrollable range so the hook's clamp has room to move.
+// scrollable range so the hook's clamp has room to move. Records capture calls.
 function stubCapture(el: HTMLElement, scrollWidth = 1000, clientWidth = 300) {
-  el.setPointerCapture = () => {};
-  el.releasePointerCapture = () => {};
+  const captured: number[] = [];
+  const released: number[] = [];
+  el.setPointerCapture = (id: number) => void captured.push(id);
+  el.releasePointerCapture = (id: number) => void released.push(id);
   Object.defineProperty(el, "scrollWidth", { value: scrollWidth, configurable: true });
   Object.defineProperty(el, "clientWidth", { value: clientWidth, configurable: true });
+  return { captured, released };
 }
 
 function down(target: Element, x: number, button = 0) {
@@ -173,5 +176,38 @@ describe("useBoardDragPan", () => {
 
     up(el);
     expect(el.style.userSelect).toBe(""); // restored on release
+  });
+
+  it("captures the pointer on pointerdown (before any move) so exit can't lose it", () => {
+    const { getByTestId } = render(<Harness />);
+    const el = getByTestId("scroller");
+    const { captured, released } = stubCapture(el);
+
+    down(getByTestId("blank"), 200);
+    expect(captured).toEqual([1]); // captured immediately, not deferred to move
+
+    up(el);
+    expect(released).toEqual([1]); // released on gesture end
+  });
+
+  it("keeps panning after the pointer leaves the container (no scroll-back on exit)", () => {
+    const { getByTestId } = render(<Harness />);
+    const el = getByTestId("scroller");
+    stubCapture(el);
+    el.scrollLeft = 300;
+
+    down(getByTestId("blank"), 200);
+    move(el, 220); // activate; delta 20 -> 280
+
+    // Pointer moves outside the container bounds. Because it's captured on
+    // pointerdown, the events still target `el` and we keep following clientX.
+    // Nothing pulls scrollLeft back toward the start.
+    fireEvent.pointerMove(el, { clientX: 260, clientY: 5000, pointerId: 1, buttons: 1 });
+    expect(el.scrollLeft).toBe(240); // 280 - 40, monotonic follow, no bounce
+    fireEvent.pointerMove(el, { clientX: 300, clientY: 5000, pointerId: 1, buttons: 1 });
+    expect(el.scrollLeft).toBe(200); // 240 - 40, still following
+
+    up(el);
+    expect(el.scrollLeft).toBe(200); // stays put after release
   });
 });
