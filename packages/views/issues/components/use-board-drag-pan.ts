@@ -25,6 +25,11 @@ const INTERACTIVE_SELECTOR =
  *     `mousedown → contextmenu → mousemove` ordering problem cannot occur.
  *   - Activation is gated on a ~5px move so a plain click is not swallowed.
  *   - Horizontal axis only: `deltaY` is never read, `scrollTop` never written.
+ *     `scrollLeft` is clamped to `[0, scrollWidth - clientWidth]` so reaching an
+ *     edge stops cleanly instead of bouncing back.
+ *   - Native text selection is disabled while panning (`user-select: none` +
+ *     range clear), so the drag neither highlights column text nor lets the
+ *     selection auto-scroll fight the pan at the left edge.
  *   - Cleanup on `pointerup` / `pointercancel` / `lostpointercapture` and
  *     window `blur`, plus a `buttons` check on move, so a lost release cannot
  *     leave the board stuck in a panning state.
@@ -53,7 +58,12 @@ export function useBoardDragPan<T extends HTMLElement>() {
     }
     pointerIdRef.current = null;
     activeRef.current = false;
-    if (el) el.style.removeProperty("cursor");
+    if (el) {
+      el.style.removeProperty("cursor");
+      // Restore text selection once the gesture ends.
+      el.style.removeProperty("user-select");
+      el.style.removeProperty("-webkit-user-select");
+    }
   }, []);
 
   const onPointerDown = useCallback((event: React.PointerEvent<T>) => {
@@ -96,12 +106,27 @@ export function useBoardDragPan<T extends HTMLElement>() {
         /* capture unsupported/failed; drag still works via window fallbacks */
       }
       el.style.cursor = "grabbing";
+      // Suppress native text selection for the duration of the pan. Without
+      // this the drag selects the column/card text above; the selection's
+      // auto-scroll then fights our scrollLeft and yanks the board back toward
+      // the anchor when we reach the left edge (the "snaps back" bug).
+      el.style.userSelect = "none";
+      el.style.setProperty("-webkit-user-select", "none");
     }
 
-    // Horizontal axis only.
+    // Clear any selection that the browser started before user-select took
+    // effect (the range created between pointerdown and activation).
+    const selection =
+      typeof window !== "undefined" ? window.getSelection?.() : null;
+    if (selection && !selection.isCollapsed) selection.removeAllRanges();
+
+    // Horizontal axis only. Clamp to the scrollable range so hitting an edge
+    // simply stops rather than accumulating overscroll.
     const delta = event.clientX - lastXRef.current;
     lastXRef.current = event.clientX;
-    el.scrollLeft -= delta;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    const next = Math.min(Math.max(el.scrollLeft - delta, 0), Math.max(maxScroll, 0));
+    el.scrollLeft = next;
     event.preventDefault();
   }, [reset]);
 

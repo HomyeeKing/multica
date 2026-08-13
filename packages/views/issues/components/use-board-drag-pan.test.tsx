@@ -25,10 +25,13 @@ function Harness() {
   );
 }
 
-// jsdom lacks pointer-capture methods; stub them so the hook doesn't throw.
-function stubCapture(el: HTMLElement) {
+// jsdom lacks pointer-capture methods and doesn't lay out; stub capture and a
+// scrollable range so the hook's clamp has room to move.
+function stubCapture(el: HTMLElement, scrollWidth = 1000, clientWidth = 300) {
   el.setPointerCapture = () => {};
   el.releasePointerCapture = () => {};
+  Object.defineProperty(el, "scrollWidth", { value: scrollWidth, configurable: true });
+  Object.defineProperty(el, "clientWidth", { value: clientWidth, configurable: true });
 }
 
 function down(target: Element, x: number, button = 0) {
@@ -125,5 +128,50 @@ describe("useBoardDragPan", () => {
     move(el, 220); // activate
     fireEvent.pointerMove(el, { clientX: 220, clientY: 400, pointerId: 1, buttons: 1 });
     expect(el.scrollTop).toBe(topBefore);
+  });
+
+  it("clamps at the left edge without bouncing back (scrollLeft never goes negative)", () => {
+    const { getByTestId } = render(<Harness />);
+    const el = getByTestId("scroller");
+    stubCapture(el);
+    el.scrollLeft = 10;
+
+    down(getByTestId("blank"), 100);
+    move(el, 110); // activate; delta 10 -> would be 0
+    expect(el.scrollLeft).toBe(0);
+    // Keep dragging in the same direction well past the edge: stays at 0, no
+    // negative overscroll that would spring back on the next frame.
+    move(el, 300);
+    expect(el.scrollLeft).toBe(0);
+    move(el, 500);
+    expect(el.scrollLeft).toBe(0);
+  });
+
+  it("clamps at the right edge (never exceeds scrollWidth - clientWidth)", () => {
+    const { getByTestId } = render(<Harness />);
+    const el = getByTestId("scroller"); // max = 1000 - 300 = 700
+    stubCapture(el);
+    el.scrollLeft = 690;
+
+    down(getByTestId("blank"), 300);
+    move(el, 290); // drag left -> content moves right, scrollLeft += 10 -> 700
+    expect(el.scrollLeft).toBe(700);
+    move(el, 100); // further past the edge stays clamped
+    expect(el.scrollLeft).toBe(700);
+  });
+
+  it("disables text selection while panning and restores it afterwards", () => {
+    const { getByTestId } = render(<Harness />);
+    const el = getByTestId("scroller");
+    stubCapture(el);
+    el.scrollLeft = 100;
+
+    down(getByTestId("blank"), 200);
+    expect(el.style.userSelect).toBe(""); // not yet active (below threshold)
+    move(el, 220); // activate
+    expect(el.style.userSelect).toBe("none");
+
+    up(el);
+    expect(el.style.userSelect).toBe(""); // restored on release
   });
 });
