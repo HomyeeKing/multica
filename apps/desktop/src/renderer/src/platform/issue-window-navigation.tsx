@@ -92,6 +92,18 @@ export function IssueWindowNavigationProvider({
 
   useContentLinkHandler(navigate, runtimeConfig);
 
+  // When the same issue is re-opened, main reuses this window and pushes the
+  // fresh path (which may carry a new comment anchor) rather than spawning a
+  // duplicate window (HOM-5). Navigate in place to honor it.
+  useEffect(() => {
+    const unsubscribe = window.desktopAPI.onIssueWindowNavigate((request) => {
+      const issuePath = parseIssueWindowPath(request.path);
+      if (!issuePath) return;
+      void navigate(issuePath.path);
+    });
+    return unsubscribe;
+  }, [navigate]);
+
   const adapter = useMemo<NavigationAdapter>(() => {
     const navigateToIssue = (path: string, replace = false) => {
       const issuePath = parseIssueWindowPath(path);

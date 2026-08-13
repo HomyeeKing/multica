@@ -223,6 +223,19 @@ const desktopAPI = {
   /** Open a validated issue-detail route in a dedicated native window. */
   openIssueWindow: (request: IssueWindowRequest) =>
     ipcRenderer.invoke("window:open-issue", request),
+  /** Listen for re-open navigations pushed to a dedicated issue window when
+   *  the same issue is opened again (main reuses the window instead of
+   *  stacking a duplicate — HOM-5). Returns an unsubscribe fn. */
+  onIssueWindowNavigate: (
+    callback: (request: IssueWindowRequest) => void,
+  ) => {
+    const handler = (_event: unknown, request: IssueWindowRequest) =>
+      callback(request);
+    ipcRenderer.on("issue-window:navigate", handler);
+    return () => {
+      ipcRenderer.removeListener("issue-window:navigate", handler);
+    };
+  },
 };
 
 type DaemonReauthResult =

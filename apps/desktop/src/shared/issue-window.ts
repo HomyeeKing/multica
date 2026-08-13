@@ -88,6 +88,19 @@ export function parseIssueWindowPath(
   return { path, workspaceSlug, issueId };
 }
 
+/**
+ * Dedupe identity of a dedicated issue window: workspace + issue only. The
+ * search / hash (a comment anchor) is view state, so re-opening the same
+ * issue with a different anchor focuses the existing window rather than
+ * stacking a duplicate (HOM-5) — the same identity rule the main tab store
+ * uses for its tabs.
+ */
+export function issueWindowKey(
+  context: Pick<IssueWindowContext, "workspaceSlug" | "issueId">,
+): string {
+  return `${context.workspaceSlug}/${context.issueId}`;
+}
+
 export function encodeIssueWindowArgument(request: IssueWindowRequest): string {
   const context = parseIssueWindowRequest(request);
   if (!context) {

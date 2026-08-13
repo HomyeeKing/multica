@@ -41,6 +41,7 @@ import {
 } from "./window-state";
 import {
   encodeIssueWindowArgument,
+  issueWindowKey,
   parseIssueWindowRequest,
   type IssueWindowContext,
 } from "../shared/issue-window";
@@ -128,6 +129,11 @@ function freezeBreadcrumbPath(): string {
 
 let mainWindow: BrowserWindow | null = null;
 const issueWindows = new Set<BrowserWindow>();
+// Identity of each live issue window, so opening the same issue again focuses
+// the existing window instead of blindly stacking a duplicate (HOM-5). Keyed
+// by the canonical `${workspaceSlug}/${issueId}` — search/hash (a comment
+// anchor) is view state, the same dedupe identity the main tab store uses.
+const issueWindowKeys = new WeakMap<BrowserWindow, string>();
 const authSessionCoordinator = new AuthSessionCoordinator<BrowserWindow>(
   (window) => {
     issueWindows.delete(window);
@@ -163,6 +169,15 @@ function focusMainWindow(window: BrowserWindow): void {
   if (window.isMinimized()) window.restore();
   window.show();
   window.focus();
+}
+
+/** An already-open window showing this issue, or null. */
+function findIssueWindow(key: string): BrowserWindow | null {
+  for (const window of issueWindows) {
+    if (window.isDestroyed()) continue;
+    if (issueWindowKeys.get(window) === key) return window;
+  }
+  return null;
 }
 
 function ensureMainWindow(): BrowserWindow | null {
@@ -478,6 +493,20 @@ function createWindow(): BrowserWindow {
 }
 
 function createIssueWindow(context: IssueWindowContext): void {
+  // Reuse an already-open window for the same issue rather than stacking a
+  // duplicate (HOM-5). A re-open may carry a fresh comment anchor / query, so
+  // navigate the existing window to the new path before focusing it.
+  const key = issueWindowKey(context);
+  const existing = findIssueWindow(key);
+  if (existing) {
+    existing.webContents.send("issue-window:navigate", {
+      path: context.path,
+      title: context.title,
+    });
+    focusMainWindow(existing);
+    return;
+  }
+
   const systemLocale = getSystemLocale();
   lastKnownSystemLocale = systemLocale;
 
@@ -500,9 +529,11 @@ function createIssueWindow(context: IssueWindowContext): void {
   });
 
   issueWindows.add(window);
+  issueWindowKeys.set(window, key);
   authSessionCoordinator.registerIssueWindow(window);
   window.on("closed", () => {
     issueWindows.delete(window);
+    issueWindowKeys.delete(window);
     authSessionCoordinator.unregisterIssueWindow(window);
   });
 

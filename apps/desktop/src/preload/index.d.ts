@@ -108,6 +108,11 @@ interface DesktopAPI {
   openIssueWindow: (
     request: IssueWindowRequest,
   ) => Promise<{ ok: true } | { ok: false; reason: "invalid_request" }>;
+  /** Listen for re-open navigations pushed to this dedicated issue window
+   *  when the same issue is opened again. Returns an unsubscribe function. */
+  onIssueWindowNavigate: (
+    callback: (request: IssueWindowRequest) => void,
+  ) => () => void;
 }
 
 type DaemonReauthResult =

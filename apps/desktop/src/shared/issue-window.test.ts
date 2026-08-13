@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   encodeIssueWindowArgument,
+  issueWindowKey,
   parseIssueWindowPath,
   parseIssueWindowRequest,
   readDesktopWindowContext,
@@ -65,5 +66,37 @@ describe("issue window request", () => {
     expect(
       readDesktopWindowContext(["electron", "--multica-issue-window=%7Bbad"]),
     ).toEqual({ kind: "main" });
+  });
+});
+
+describe("issueWindowKey", () => {
+  it("keys by workspace + issue so the same issue dedupes to one window", () => {
+    const a = parseIssueWindowRequest({
+      path: "/acme/issues/issue-1?comment=comment-1#activity",
+      title: "MUL-1",
+    })!;
+    const b = parseIssueWindowRequest({
+      path: "/acme/issues/issue-1?comment=comment-9",
+      title: "MUL-1",
+    })!;
+    // Same issue, different comment anchor → same key (reuse the window).
+    expect(issueWindowKey(a)).toBe(issueWindowKey(b));
+  });
+
+  it("distinguishes different issues and different workspaces", () => {
+    const acme1 = parseIssueWindowRequest({
+      path: "/acme/issues/issue-1",
+      title: "x",
+    })!;
+    const acme2 = parseIssueWindowRequest({
+      path: "/acme/issues/issue-2",
+      title: "x",
+    })!;
+    const butter1 = parseIssueWindowRequest({
+      path: "/butter/issues/issue-1",
+      title: "x",
+    })!;
+    expect(issueWindowKey(acme1)).not.toBe(issueWindowKey(acme2));
+    expect(issueWindowKey(acme1)).not.toBe(issueWindowKey(butter1));
   });
 });

@@ -21,10 +21,15 @@ import { IssueWindowNavigationProvider } from "./issue-window-navigation";
 
 const openExternal = vi.fn().mockResolvedValue(undefined);
 const setRendererRouteContext = vi.fn();
+const onIssueWindowNavigate =
+  vi.fn<(cb: (request: { path: string; title: string }) => void) => () => void>(
+    () => () => {},
+  );
 
 beforeEach(() => {
   openExternal.mockClear();
   setRendererRouteContext.mockClear();
+  onIssueWindowNavigate.mockClear();
   Object.defineProperty(window, "desktopAPI", {
     configurable: true,
     value: {
@@ -32,6 +37,7 @@ beforeEach(() => {
       openExternal,
       setRendererRouteContext,
       openIssueWindow: vi.fn(),
+      onIssueWindowNavigate,
     },
   });
 });
@@ -93,6 +99,26 @@ describe("IssueWindowNavigationProvider content links", () => {
     unmount();
     navigate("/acme/chat");
 
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+});
+
+describe("IssueWindowNavigationProvider reuse navigation", () => {
+  it("navigates in place when main re-opens the same issue in this window", () => {
+    let pushNavigate: ((request: { path: string; title: string }) => void) | undefined;
+    onIssueWindowNavigate.mockImplementation((cb) => {
+      pushNavigate = cb;
+      return () => {};
+    });
+
+    renderWindow();
+    expect(pushNavigate).toBeDefined();
+
+    act(() => {
+      pushNavigate!({ path: "/acme/issues/MUL-9?comment=c1#activity", title: "MUL-9" });
+    });
+
+    expect(screen.getByTestId("path")).toHaveTextContent("/acme/issues/MUL-9");
     expect(openExternal).not.toHaveBeenCalled();
   });
 });
