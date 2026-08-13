@@ -1200,7 +1200,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     requestAnimationFrame(() => {
       document.getElementById(`comment-${commentId}`)?.scrollIntoView({
         behavior: "smooth",
-        block: "nearest",
+        block: "end",
       });
     });
   }, []);

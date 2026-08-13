@@ -946,7 +946,7 @@ describe("IssueDetail (shared)", () => {
     fireEvent.click(within(composer).getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
-      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "nearest" });
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "end" });
     });
     target.remove();
   });
