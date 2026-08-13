@@ -921,7 +921,7 @@ describe("IssueDetail (shared)", () => {
     expect(container.querySelector(".sticky.bottom-0")).toBeNull();
   });
 
-  it("waits for Virtuoso to render before scrolling like the minimap", async () => {
+  it("realigns after Virtuoso measures the newly posted row", async () => {
     mockApiObj.createComment.mockResolvedValue({
       id: "comment-new",
       issue_id: "issue-1",
@@ -944,8 +944,10 @@ describe("IssueDetail (shared)", () => {
 
     expect(scrollToIndexSpy).not.toHaveBeenCalled();
     await waitFor(() => {
-      expect(scrollToIndexSpy).toHaveBeenCalledWith({ index: 2, align: "end" });
+      expect(scrollToIndexSpy).toHaveBeenCalledTimes(2);
     });
+    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(1, { index: 2, align: "end" });
+    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(2, { index: 2, align: "end" });
     expect(scrollIntoViewSpy).not.toHaveBeenCalled();
   });
 
