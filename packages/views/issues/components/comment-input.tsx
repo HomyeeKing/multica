@@ -21,9 +21,11 @@ interface CommentInputProps {
    *  (editor locked + button spinning) until this settles, then clears only on
    *  success — a failed send must not silently discard the user's draft. */
   onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<boolean>;
+  /** Called after the server accepts the comment and the composer is cleared. */
+  onAccepted?: () => void;
 }
 
-function CommentInput({ issueId, onSubmit }: CommentInputProps) {
+function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
   const { t } = useT("issues");
   const { t: tEditor } = useT("editor");
   const sendShortcut = useShortcut("send");
@@ -184,6 +186,7 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
       setIsEmpty(true);
       setSuppressedAgentIds(new Set());
       editorScrubbedRef.current = true;
+      onAccepted?.();
     },
   });
 

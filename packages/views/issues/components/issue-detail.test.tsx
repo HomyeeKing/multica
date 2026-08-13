@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useRef, useState, useImperativeHandle } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue, Label, TimelineEntry } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -917,6 +917,37 @@ describe("IssueDetail (shared)", () => {
     });
 
     expect(container.querySelector(".sticky.bottom-0")).toBeNull();
+  });
+
+  it("scrolls the issue timeline to the bottom after posting a comment", async () => {
+    mockApiObj.createComment.mockResolvedValue({
+      id: "comment-new",
+      issue_id: "issue-1",
+      content: "A new update",
+      author_type: "member",
+      author_id: "user-1",
+      parent_id: null,
+      type: "comment",
+      created_at: "2026-08-13T00:00:00Z",
+      updated_at: "2026-08-13T00:00:00Z",
+    });
+    const scrollTo = vi.fn();
+    const { container } = renderIssueDetail();
+
+    await screen.findByText("Implement authentication");
+    const scrollContainer = container.querySelector("[data-tab-scroll-root]") as HTMLDivElement;
+    Object.defineProperty(scrollContainer, "scrollHeight", { value: 1200 });
+    Object.defineProperty(scrollContainer, "scrollTo", { value: scrollTo });
+
+    fireEvent.click(screen.getByTestId("comment-composer-shell"));
+    const editor = await screen.findByPlaceholderText("Leave a comment...");
+    fireEvent.change(editor, { target: { value: "A new update" } });
+    const composer = editor.closest<HTMLElement>("[aria-busy], .relative.flex.flex-col.rounded-lg")!;
+    fireEvent.click(within(composer).getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenCalledWith({ top: 1200, behavior: "smooth" });
+    });
   });
 
   it("reserves the chat launcher's corner at the end of the mobile scroll", async () => {

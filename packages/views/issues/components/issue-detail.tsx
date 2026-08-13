@@ -1192,6 +1192,18 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     },
     [restoreScrollRef],
   );
+  const scrollToTimelineBottom = useCallback(() => {
+    // The create-comment mutation updates the timeline before resolving, but
+    // Virtuoso applies the new row's measured height on the next frame. Wait
+    // for that commit, then scroll only this issue's container (native
+    // scrollIntoView can also move the surrounding desktop shell).
+    requestAnimationFrame(() => {
+      scrollContainerEl?.scrollTo({
+        top: scrollContainerEl.scrollHeight,
+        behavior: "smooth",
+      });
+    });
+  }, [scrollContainerEl]);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   // User preference: pin the bottom comment bar to the scroll viewport. Off
   // below `md` regardless of the preference — see the hook.
@@ -3098,7 +3110,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 keeps the previous issue's in-memory content and the
                 next keystroke would flush it into the new issue's
                 draft key. */}
-            <CommentInput key={id} issueId={id} onSubmit={submitComment} />
+            <CommentInput
+              key={id}
+              issueId={id}
+              onSubmit={submitComment}
+              onAccepted={scrollToTimelineBottom}
+            />
           </div>
         </div>
         </div>
