@@ -921,7 +921,7 @@ describe("IssueDetail (shared)", () => {
     expect(container.querySelector(".sticky.bottom-0")).toBeNull();
   });
 
-  it("scrolls the posted comment with the same Virtuoso path as the minimap", async () => {
+  it("waits for Virtuoso to render before scrolling like the minimap", async () => {
     mockApiObj.createComment.mockResolvedValue({
       id: "comment-new",
       issue_id: "issue-1",
@@ -942,6 +942,7 @@ describe("IssueDetail (shared)", () => {
     const composer = editor.closest<HTMLElement>("[aria-busy], .relative.flex.flex-col.rounded-lg")!;
     fireEvent.click(within(composer).getByRole("button", { name: "Send" }));
 
+    expect(scrollToIndexSpy).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(scrollToIndexSpy).toHaveBeenCalledWith({ index: 2, align: "end" });
     });

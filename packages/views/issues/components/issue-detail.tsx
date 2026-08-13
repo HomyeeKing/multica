@@ -1551,15 +1551,24 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     // Match the minimap's single-scroll behavior. A reply lives inside its
     // root CommentCard, so scrolling the containing top-level row to the end
     // both materializes it and keeps Virtuoso as the sole scroll controller.
-    // Following this with native scrollIntoView would interrupt Virtuoso's
-    // smooth scroll and can leave the card only partially visible.
+    // The items prop and Virtuoso's internal measurements do not settle in
+    // the same commit, so wait through the next paint before scrolling.
     const rootId = replyToRoot.get(pendingPostedCommentId) ?? pendingPostedCommentId;
     const index = items.findIndex((item) => item.id === rootId);
     if (index < 0) return;
-    if (!isFlatTimeline) {
-      virtuosoRef.current?.scrollToIndex({ index, align: "end" });
-    }
-    setPendingPostedCommentId(null);
+    let timer: number | undefined;
+    const frame = requestAnimationFrame(() => {
+      timer = window.setTimeout(() => {
+        if (!isFlatTimeline) {
+          virtuosoRef.current?.scrollToIndex({ index, align: "end" });
+        }
+        setPendingPostedCommentId(null);
+      }, 50);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [pendingPostedCommentId, items, replyToRoot, isFlatTimeline]);
   const jumpFlashTimerRef = useRef<number | null>(null);
   useEffect(
