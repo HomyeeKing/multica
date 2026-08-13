@@ -6,8 +6,32 @@ import { useCallback, useEffect, useRef } from "react";
  * recognized as a drag. */
 const PAN_ACTIVATION_DISTANCE = 5;
 
-const INTERACTIVE_SELECTOR =
-  "[data-board-card], a, button, input, textarea, select, [role='button'], [contenteditable='true']";
+// Elements whose press must NOT start a board pan — they own their own pointer
+// semantics (dnd-kit cards, links, form controls, menus). A gesture starting
+// anywhere inside one of these is left untouched. Kept broad on purpose (P2-4):
+// besides the obvious controls it covers label/checkbox/radio, ARIA link/menu/
+// option roles, and elements that opt out via `data-no-board-pan`.
+const INTERACTIVE_SELECTOR = [
+  "[data-board-card]",
+  "[data-no-board-pan]",
+  "a",
+  "button",
+  "input",
+  "textarea",
+  "select",
+  "option",
+  "label",
+  "summary",
+  "[role='button']",
+  "[role='link']",
+  "[role='menuitem']",
+  "[role='option']",
+  "[role='checkbox']",
+  "[role='radio']",
+  "[role='tab']",
+  "[role='switch']",
+  "[contenteditable='true']",
+].join(", ");
 
 /**
  * Blank-area left-drag panning for a horizontally scrollable board (#6700,
@@ -17,15 +41,29 @@ const INTERACTIVE_SELECTOR =
  * of the way because it never activates when the gesture starts on a card or
  * any interactive element.
  *
- * Design notes:
+ * ### dnd-kit coexistence invariant (P2-5 — do not break)
+ * These pointer handlers sit on the SAME scroll container that hosts the
+ * `DndContext`. They are mutually exclusive with card dragging purely by
+ * ORIGIN: `onPointerDown` bails whenever the press starts inside
+ * `INTERACTIVE_SELECTOR`, and every draggable card root carries
+ * `data-board-card` (see `DraggableBoardCard` in `board-card.tsx`). If a future
+ * change removes that attribute from the card root, or nests the pan container
+ * below the card listeners, card drags and board pans will start fighting.
+ * Keep `data-board-card` on the card root and keep this exclusion in sync.
+ *
+ * ### Design notes
  *   - Pointer Events + pointer capture claimed on `pointerdown` (not deferred
  *     to first move), so every `pointermove` keeps dispatching to the container
  *     even after the pointer leaves it or the window. Deferring capture was the
  *     "scrolls back when the pointer exits the board" bug: without an early
  *     capture the browser ran a native selection-drag whose auto-scroll fought
  *     `scrollLeft`, and re-entering the container produced a jumped delta.
- *   - `preventDefault()` on `pointerdown` stops the native text/image drag from
- *     starting at all, so no selection can auto-scroll the container.
+ *   - Text selection is suppressed from `pointerdown` (P1-3): `user-select:
+ *     none` on the container plus `selectstart` / `dragstart` preventers, then
+ *     restored in `reset`. Doing it on down (not after the 5px threshold) closes
+ *     the window where Safari/Firefox would start a selection whose auto-scroll
+ *     yanks the board back. Because selection can no longer begin, `pointermove`
+ *     no longer needs a per-frame `removeAllRanges` (P3-7).
  *   - Left button only (`event.button === 0`). Right/middle are untouched, so
  *     the native context menu is never suppressed and the earlier
  *     `mousedown → contextmenu → mousemove` ordering problem cannot occur.
@@ -35,11 +73,15 @@ const INTERACTIVE_SELECTOR =
  *   - Horizontal axis only: `deltaY` is never read, `scrollTop` never written.
  *     `scrollLeft` is clamped to `[0, scrollWidth - clientWidth]` so reaching an
  *     edge stops cleanly instead of bouncing back.
- *   - Native text selection is also disabled while panning (`user-select:
- *     none` + range clear) as defense in depth.
  *   - Cleanup on `pointerup` / `pointercancel` / `lostpointercapture` and
  *     window `blur`, plus a `buttons` check on move, so a lost release cannot
  *     leave the board stuck in a panning state.
+ *
+ * The container must also carry `touch-action: pan-y` (P1-2) so touchpad/touch
+ * horizontal gestures don't run a parallel native scroll that fights our
+ * `scrollLeft` and fires `pointercancel`; we take over the horizontal axis and
+ * leave vertical to the browser. That style is applied where the props are
+ * spread (see `board-view.tsx`).
  *
  * Returns props to spread onto the scroll container.
  */
@@ -51,6 +93,11 @@ export function useBoardDragPan<T extends HTMLElement>() {
   const activeRef = useRef(false);
   const startXRef = useRef(0);
   const lastXRef = useRef(0);
+
+  const beginSelectionSuppression = useCallback((el: T) => {
+    el.style.userSelect = "none";
+    el.style.setProperty("-webkit-user-select", "none");
+  }, []);
 
   const reset = useCallback(() => {
     const el = ref.current;
@@ -79,7 +126,7 @@ export function useBoardDragPan<T extends HTMLElement>() {
     const el = ref.current;
     if (!el) return;
     // Ignore gestures that begin on a card or interactive control — those
-    // belong to dnd-kit / links / form fields.
+    // belong to dnd-kit / links / form fields (see coexistence invariant).
     const target = event.target as Element | null;
     if (target && target.closest(INTERACTIVE_SELECTOR)) return;
 
@@ -88,16 +135,22 @@ export function useBoardDragPan<T extends HTMLElement>() {
     startXRef.current = event.clientX;
     lastXRef.current = event.clientX;
 
+    // Suppress text selection from the very first event (P1-3), before the 5px
+    // threshold, so no selection can begin and auto-scroll the container.
+    beginSelectionSuppression(el);
+
     // Claim the pointer immediately so subsequent moves keep coming to this
-    // element even once the cursor leaves the board, and stop the native
-    // selection/image drag before it can start its own auto-scroll.
+    // element even once the cursor leaves the board.
     try {
       el.setPointerCapture(event.pointerId);
     } catch {
-      /* capture unsupported/failed; window blur fallback still cleans up */
+      // Pointer capture unsupported/rejected (older engines, synthetic events).
+      // The gesture still works: pointer events keep flowing to the container
+      // while the button is held, and the window `blur` handler plus the
+      // per-move `buttons` check below guarantee cleanup if a release is missed.
     }
     event.preventDefault();
-  }, []);
+  }, [beginSelectionSuppression]);
 
   const onPointerMove = useCallback((event: React.PointerEvent<T>) => {
     if (pointerIdRef.current === null || event.pointerId !== pointerIdRef.current) return;
@@ -113,21 +166,15 @@ export function useBoardDragPan<T extends HTMLElement>() {
 
     if (!activeRef.current) {
       if (Math.abs(event.clientX - startXRef.current) < PAN_ACTIVATION_DISTANCE) return;
-      // Cross the threshold: begin panning. Pointer is already captured from
-      // pointerdown; just switch on the panning affordances.
+      // Cross the threshold: begin panning. Pointer is already captured and
+      // selection already suppressed from pointerdown; just show the affordance.
       activeRef.current = true;
       el.style.cursor = "grabbing";
-      el.style.userSelect = "none";
-      el.style.setProperty("-webkit-user-select", "none");
     }
 
-    // Clear any stray selection the browser may still have started.
-    const selection =
-      typeof window !== "undefined" ? window.getSelection?.() : null;
-    if (selection && !selection.isCollapsed) selection.removeAllRanges();
-
     // Horizontal axis only, driven by captured-pointer clientX deltas. Clamp to
-    // the scrollable range so hitting an edge simply stops.
+    // the scrollable range so hitting an edge simply stops. (Selection was
+    // suppressed on pointerdown, so no per-frame range clearing is needed.)
     const delta = event.clientX - lastXRef.current;
     lastXRef.current = event.clientX;
     const maxScroll = el.scrollWidth - el.clientWidth;
@@ -141,6 +188,25 @@ export function useBoardDragPan<T extends HTMLElement>() {
     reset();
   }, [reset]);
 
+  // Belt-and-suspenders selection/native-drag blockers while a gesture is
+  // pending or active (P1-3): `user-select` covers most engines, but Safari and
+  // Firefox can still start a selection or an image/text drag, so veto the
+  // events outright until the gesture ends. Attached as native listeners
+  // because React has no synthetic `selectstart` event.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const veto = (event: Event) => {
+      if (pointerIdRef.current !== null) event.preventDefault();
+    };
+    el.addEventListener("selectstart", veto);
+    el.addEventListener("dragstart", veto);
+    return () => {
+      el.removeEventListener("selectstart", veto);
+      el.removeEventListener("dragstart", veto);
+    };
+  }, []);
+
   useEffect(() => {
     const handleBlur = () => reset();
     window.addEventListener("blur", handleBlur);
@@ -149,6 +215,10 @@ export function useBoardDragPan<T extends HTMLElement>() {
 
   return {
     ref,
+    // `touch-action: pan-y` (P1-2): we own the horizontal axis; leave vertical
+    // scrolling to the browser and stop it from running a parallel native
+    // horizontal gesture that would fight us and fire pointercancel.
+    style: { touchAction: "pan-y" } as const,
     onPointerDown,
     onPointerMove,
     onPointerUp,

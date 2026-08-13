@@ -11,6 +11,7 @@ function Harness() {
     <div
       data-testid="scroller"
       ref={pan.ref}
+      style={pan.style}
       onPointerDown={pan.onPointerDown}
       onPointerMove={pan.onPointerMove}
       onPointerUp={pan.onPointerUp}
@@ -21,6 +22,9 @@ function Harness() {
       <div data-board-card="" data-testid="card">
         <span data-testid="card-child" />
       </div>
+      <button data-testid="ctrl-button">b</button>
+      <label data-testid="ctrl-label">l</label>
+      <div role="link" data-testid="ctrl-rolelink">r</div>
     </div>
   );
 }
@@ -80,15 +84,32 @@ describe("useBoardDragPan", () => {
     expect(el.scrollLeft).toBe(50);
   });
 
-  it("ignores drags that start on a card (dnd-kit keeps ownership)", () => {
+  it("ignores drags that start on a card so only dnd-kit runs (P2-5 invariant)", () => {
     const { getByTestId } = render(<Harness />);
     const el = getByTestId("scroller");
-    stubCapture(el);
+    const { captured } = stubCapture(el);
     el.scrollLeft = 30;
 
     down(getByTestId("card-child"), 200); // starts inside [data-board-card]
     move(el, 260);
     expect(el.scrollLeft).toBe(30); // never panned, card sorting untouched
+    // The pan hook must not claim the pointer for a card-origin gesture, or it
+    // would steal the drag from dnd-kit.
+    expect(captured).toEqual([]);
+    expect(el.style.userSelect).toBe(""); // no selection suppression either
+  });
+
+  it("ignores drags that start on interactive controls (label, role=link, button)", () => {
+    const { getByTestId } = render(<Harness />);
+    const el = getByTestId("scroller");
+    stubCapture(el);
+
+    for (const id of ["ctrl-button", "ctrl-label", "ctrl-rolelink"]) {
+      el.scrollLeft = 30;
+      down(getByTestId(id), 200);
+      move(el, 260);
+      expect(el.scrollLeft).toBe(30);
+    }
   });
 
   it("ignores the right button entirely (context menu path untouched)", () => {
@@ -163,19 +184,52 @@ describe("useBoardDragPan", () => {
     expect(el.scrollLeft).toBe(700);
   });
 
-  it("disables text selection while panning and restores it afterwards", () => {
+  it("suppresses text selection from pointerdown (P1-3) and restores it on release", () => {
     const { getByTestId } = render(<Harness />);
     const el = getByTestId("scroller");
     stubCapture(el);
     el.scrollLeft = 100;
 
     down(getByTestId("blank"), 200);
-    expect(el.style.userSelect).toBe(""); // not yet active (below threshold)
+    // Suppressed immediately on down — NOT deferred to the 5px threshold.
+    expect(el.style.userSelect).toBe("none");
     move(el, 220); // activate
     expect(el.style.userSelect).toBe("none");
 
     up(el);
     expect(el.style.userSelect).toBe(""); // restored on release
+  });
+
+  it("vetoes selectstart / dragstart while a gesture is pending (P1-3)", () => {
+    const { getByTestId } = render(<Harness />);
+    const el = getByTestId("scroller");
+    stubCapture(el);
+
+    // `selectstart` isn't in fireEvent's map; dispatch a real cancelable event
+    // and check whether the handler called preventDefault (dispatchEvent
+    // returns false when it did).
+    const fireSelectStart = () =>
+      el.dispatchEvent(new Event("selectstart", { bubbles: true, cancelable: true }));
+    const fireDragStart = () =>
+      el.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true }));
+
+    // No gesture yet: events pass through untouched.
+    expect(fireSelectStart()).toBe(true);
+    expect(fireDragStart()).toBe(true);
+
+    down(getByTestId("blank"), 200);
+    // Gesture pending: both are prevented (dispatchEvent returns false when
+    // preventDefault was called).
+    expect(fireSelectStart()).toBe(false);
+    expect(fireDragStart()).toBe(false);
+
+    up(el);
+    expect(fireSelectStart()).toBe(true); // released after gesture end
+  });
+
+  it("sets touch-action: pan-y on the container (P1-2)", () => {
+    const { getByTestId } = render(<Harness />);
+    expect(getByTestId("scroller").style.touchAction).toBe("pan-y");
   });
 
   it("captures the pointer on pointerdown (before any move) so exit can't lose it", () => {

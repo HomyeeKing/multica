@@ -563,6 +563,7 @@ function BoardViewImpl({
     >
       <div
         ref={pan.ref}
+        style={pan.style}
         onPointerDown={pan.onPointerDown}
         onPointerMove={pan.onPointerMove}
         onPointerUp={pan.onPointerUp}
