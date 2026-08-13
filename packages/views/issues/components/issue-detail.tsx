@@ -1192,17 +1192,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     },
     [restoreScrollRef],
   );
+  const [pendingPostedCommentId, setPendingPostedCommentId] = useState<string | null>(null);
   const scrollToTimelineBottom = useCallback((commentId: string) => {
-    // The create-comment mutation updates the timeline before resolving, but
-    // Virtuoso applies the new row's measured height on the next frame. The
-    // new comment/reply itself is the precise target; scrolling the composer
-    // below it can leave a tall message partly outside the viewport.
-    requestAnimationFrame(() => {
-      document.getElementById(`comment-${commentId}`)?.scrollIntoView({
-        behavior: "smooth",
-        block: "end",
-      });
-    });
+    setPendingPostedCommentId(commentId);
   }, []);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   // User preference: pin the bottom comment bar to the scroll viewport. Off
@@ -1553,6 +1545,35 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // Virtuoso instance — minimap jumps drive the scroll container directly.
   const isFlatTimeline = !!highlightCommentId || find.open;
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  useEffect(() => {
+    if (!pendingPostedCommentId) return;
+
+    // A newly appended row can be outside Virtuoso's mounted window. First
+    // move the virtual list to the containing top-level row so it materializes
+    // (a reply lives inside its root CommentCard), then align the exact DOM
+    // anchor once measurement has completed. The minimap only observes these
+    // anchors; it does not own or block scrolling.
+    const rootId = replyToRoot.get(pendingPostedCommentId) ?? pendingPostedCommentId;
+    const index = items.findIndex((item) => item.id === rootId);
+    if (index < 0) return;
+    if (!isFlatTimeline) {
+      virtuosoRef.current?.scrollToIndex({ index, align: "end" });
+    }
+
+    let frame = 0;
+    let attempts = 0;
+    const alignExactComment = () => {
+      const target = document.getElementById(`comment-${pendingPostedCommentId}`);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "end" });
+        setPendingPostedCommentId(null);
+        return;
+      }
+      if (++attempts < 12) frame = requestAnimationFrame(alignExactComment);
+    };
+    frame = requestAnimationFrame(alignExactComment);
+    return () => cancelAnimationFrame(frame);
+  }, [pendingPostedCommentId, items, replyToRoot, isFlatTimeline]);
   const jumpFlashTimerRef = useRef<number | null>(null);
   useEffect(
     () => () => {
