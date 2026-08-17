@@ -946,8 +946,8 @@ describe("IssueDetail (shared)", () => {
     await waitFor(() => {
       expect(scrollToIndexSpy).toHaveBeenCalledTimes(2);
     });
-    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(1, { index: 2, align: "end" });
-    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(2, { index: 2, align: "end" });
+    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(1, { index: 2, align: "end", offset: 0 });
+    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(2, { index: 2, align: "end", offset: 0 });
     expect(scrollIntoViewSpy).not.toHaveBeenCalled();
   });
 
