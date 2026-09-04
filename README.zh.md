@@ -228,6 +228,32 @@ make dev
 iOS 客户端在 [`apps/mobile/`](apps/mobile/)，怎么编译装到自己 iPhone 上见它的
 [README](apps/mobile/README.md)。
 
+### 使用线上 API 调试本地前端
+
+如果只想验证本地 Web 前端、但使用线上 Multica API 和数据，请在仓库根目录 `.env` 中配置远端
+API，并开启本地 Bearer token 登录模式：
+
+```dotenv
+REMOTE_API_URL=https://api.multica.ai
+NEXT_PUBLIC_AUTH_MODE=token
+```
+
+不要设置 `NEXT_PUBLIC_API_URL`。否则浏览器会直接请求该地址，绕过 Next.js 的同源代理。修改
+`NEXT_PUBLIC_*` 变量后需要清理 `.next` 并重启前端，因为 Next.js 会把这些变量编译进客户端：
+
+```bash
+rm -rf apps/web/.next
+FRONTEND_PORT=3000 pnpm --filter @multica/web dev
+```
+
+然后打开 <http://localhost:3000>。此模式会把 `/api/*`、`/auth/*`、`/uploads/*`、`/v1/*`、
+`/ws` 和 `/health` 代理到 `REMOTE_API_URL`，并将登录返回的 token 保存在本地，通过 Bearer
+token 发送后续请求，不依赖线上 HttpOnly Cookie。
+
+如果登录后请求返回 `401`，请确认 `NEXT_PUBLIC_AUTH_MODE=token` 已生效，删除旧的
+`localStorage.multica_token`，清理 `apps/web/.next` 后重启前端。线上未设置该变量时仍使用默认
+的 HttpOnly Cookie 登录流程。
+
 我们几乎每个工作日都发版，`main` 走得很快——记得常拉最新代码。
 
 ---
