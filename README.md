@@ -236,33 +236,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, worktree support, 
 troubleshooting. The iOS client lives in [`apps/mobile/`](apps/mobile/) — its
 [README](apps/mobile/README.md) covers building it onto your own iPhone.
 
-### Frontend development against the remote API
-
-To run the current Web frontend locally while reading data from a remote Multica API, set the
-remote origin in the root `.env` and opt into the local bearer-token login flow:
-
-```dotenv
-REMOTE_API_URL=https://api.multica.ai
-NEXT_PUBLIC_AUTH_MODE=token
-```
-
-Leave `NEXT_PUBLIC_API_URL` unset. Otherwise the browser talks directly to that URL and bypasses
-the same-origin Next.js proxy. Restart the Web app after changing `NEXT_PUBLIC_*` variables because
-Next.js embeds them into the client bundle:
-
-```bash
-rm -rf apps/web/.next
-FRONTEND_PORT=3000 pnpm --filter @multica/web dev
-```
-
-Open <http://localhost:3000>. In this mode `/api/*`, `/auth/*`, `/uploads/*`, `/v1/*`, `/ws`, and
-`/health` are proxied to `REMOTE_API_URL`, while the login response token is stored locally and
-sent as a Bearer token. This keeps remote HttpOnly cookies out of the local browser session.
-
-If login succeeds but requests return `401`, verify that `NEXT_PUBLIC_AUTH_MODE=token` is present,
-remove any stale `localStorage.multica_token`, clear `apps/web/.next`, and restart the Web app.
-Production keeps the default HttpOnly cookie flow when this variable is unset.
-
 We release most weekdays, so `main` moves quickly — pull often.
 
 ---
