@@ -13,6 +13,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // RecoverOrphanedTasks is called by the daemon at startup for each runtime
@@ -162,7 +163,8 @@ type RecordTaskCheckoutBranchRequest struct {
 // identifier scan at webhook time.
 func (h *Handler) RecordTaskCheckoutBranch(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
-	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
+	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
 		return
 	}
 
@@ -195,6 +197,13 @@ func (h *Handler) RecordTaskCheckoutBranch(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "record checkout branch failed")
 		return
 	}
+	// The issue sidebar reads branch_name from the per-issue task list. Notify
+	// connected clients immediately so a branch created after the page opened
+	// appears without waiting for task completion or a manual refresh.
+	h.publishTask(protocol.EventTaskBranchRecorded, workspaceID, "system", "", taskID, map[string]any{
+		"task_id":     taskID,
+		"branch_name": req.BranchName,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

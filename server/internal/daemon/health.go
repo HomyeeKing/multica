@@ -516,19 +516,19 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 		// so the GitHub webhook can later match a PR by branch — scoped to the
 		// exact repo it was cloned from — instead of scraping identifiers.
 		// Best-effort and non-fatal: the identifier scan still backstops a miss,
-		// and checkout must not fail because this bookkeeping call did. Fire it
-		// off the request's lifetime so a slow server write does not stall the
-		// agent's checkout. The server derives the repo identity from the URL so
-		// the parsing lives beside the webhook that consumes it.
+		// and checkout must not fail because this bookkeeping call did. Complete
+		// the bounded write before returning the checkout result: a fast agent can
+		// push and open its PR immediately, and an async report racing that webhook
+		// would leave the PR permanently unlinked. The server derives the repo
+		// identity from the URL so parsing stays beside the webhook that consumes it.
 		if result != nil && result.BranchName != "" && d.client != nil {
-			go func(taskID, branch, repoURL string) {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				if err := d.client.RecordTaskCheckoutBranch(ctx, taskID, branch, repoURL); err != nil {
-					d.logger.Warn("repo checkout: record branch mapping failed",
-						"task_id", taskID, "branch", branch, "error", err)
-				}
-			}(activeTask.TaskID, result.BranchName, req.URL)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := d.client.RecordTaskCheckoutBranch(ctx, activeTask.TaskID, result.BranchName, req.URL)
+			cancel()
+			if err != nil {
+				d.logger.Warn("repo checkout: record branch mapping failed",
+					"task_id", activeTask.TaskID, "branch", result.BranchName, "error", err)
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
