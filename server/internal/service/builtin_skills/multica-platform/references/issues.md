@@ -74,8 +74,9 @@ instead of pretending the run is complete.
 For a repository checked out through Multica, create the PR from that checkout's
 current branch; the daemon records the repository + branch before returning the
 checkout, and the webhook links that exact head branch to the issue. For a PR
-created outside a Multica checkout, use a routable issue key in its title, body,
-or branch as the fallback. If the PR should close the issue on merge, put the key
+created outside a Multica checkout, use the identifier fallback: Use a routable
+issue key in the PR title, body, or branch. If the PR should close the issue on
+merge, put the key
 immediately after a closing keyword in the title or body, for example:
 
 ```text
