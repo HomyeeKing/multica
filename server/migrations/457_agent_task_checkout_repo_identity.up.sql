@@ -1,6 +1,6 @@
 -- Repo scope for the branch-exact PR auto-link path (HOM-16 follow-up).
 --
--- 451 keyed the branch → issue lookup on (workspace_id, branch_name) alone. That
+-- 456 keyed the branch → issue lookup on (workspace_id, branch_name) alone. That
 -- is not enough: a workspace can hold several repos at once, and even mix
 -- providers (a GitHub App installation alongside VCS connections for
 -- GitLab/Forgejo, plus local_directory resources). Every run records the SAME

@@ -716,7 +716,7 @@ func isDuplicatePendingTaskErr(err error) bool {
 		return false
 	}
 	switch pgErr.ConstraintName {
-	case "idx_one_pending_task_per_issue_agent", "idx_one_pending_task_per_issue_agent_v2":
+	case "idx_one_pending_task_per_issue_agent", "idx_one_pending_task_per_issue_agent_v2", "idx_one_pending_task_per_issue_agent_thread":
 		return true
 	default:
 		return false
@@ -5295,9 +5295,10 @@ func hasRunnableSuccessor(ctx context.Context, q *db.Queries, task db.AgentTaskQ
 	if !task.IssueID.Valid {
 		return false, nil
 	}
-	return q.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
-		IssueID: task.IssueID,
-		AgentID: task.AgentID,
+	return q.HasPendingTaskForIssueAndAgentInThread(ctx, db.HasPendingTaskForIssueAndAgentInThreadParams{
+		ThreadCommentID: task.TriggerCommentID,
+		IssueID:         task.IssueID,
+		AgentID:         task.AgentID,
 	})
 }
 
@@ -5621,9 +5622,10 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 		// that failed after this committed.
 		cerr := s.runInTx(ctx, func(qtx *db.Queries) error {
 			var err error
-			cancelled, err = qtx.CancelPendingTasksByIssueAndAgent(ctx, db.CancelPendingTasksByIssueAndAgentParams{
-				IssueID: issueID,
-				AgentID: agentID,
+			cancelled, err = qtx.CancelPendingTasksByIssueAndAgentInThread(ctx, db.CancelPendingTasksByIssueAndAgentInThreadParams{
+				ThreadCommentID: triggerCommentID,
+				IssueID:         issueID,
+				AgentID:         agentID,
 			})
 			if err != nil {
 				return err
@@ -5808,13 +5810,24 @@ func (s *TaskService) RecoverOrphanedTasksForRuntime(ctx context.Context, runtim
 // CancelTasksForArchivedAgent cancels every active task belonging to an agent
 // being archived and settles their recovery receipts in the same transaction.
 //
-// Unlike CancelTasksForAgent it emits no per-task task:cancelled event: the
-// agent:archived event the caller publishes already invalidates every client's
-// active-task view, so per-row events would be redundant noise.
+// After commit, cancellation side effects are captured before chat tasks emit
+// task:cancelled so existing consumers can clear processing indicators, release
+// streams, and refresh chat state. The caller still publishes agent:archived;
+// non-chat tasks keep their existing behavior.
 func (s *TaskService) CancelTasksForArchivedAgent(ctx context.Context, agentID pgtype.UUID) ([]db.AgentTaskQueue, error) {
-	return s.terminateTasksInTx(ctx, func(qtx *db.Queries) ([]db.AgentTaskQueue, error) {
+	cancelled, err := s.terminateTasksInTx(ctx, func(qtx *db.Queries) ([]db.AgentTaskQueue, error) {
 		return qtx.CancelAgentTasksByAgent(ctx, agentID)
 	})
+	if err != nil {
+		return nil, err
+	}
+	s.CaptureCancelledTasks(ctx, cancelled)
+	for _, task := range cancelled {
+		if task.ChatSessionID.Valid {
+			s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, task)
+		}
+	}
+	return cancelled, nil
 }
 
 func (s *TaskService) terminateTasksInTx(ctx context.Context, fail func(*db.Queries) ([]db.AgentTaskQueue, error)) ([]db.AgentTaskQueue, error) {
@@ -7524,11 +7537,12 @@ func (s *TaskService) notifyQuickCreateCompleted(ctx context.Context, task db.Ag
 		return
 	}
 
-	// Link the new issue back to this task so subsequent reads of the task
-	// (Activity tab, Recent work, etc.) render it as a normal issue task
-	// (kind = "direct") instead of staying on the "Creating issue" active-
-	// wording label. Best-effort: a write failure here doesn't block the
-	// inbox notification, which is the more important signal to the user.
+	// Link the new issue back to this task so subsequent reads (Activity tab,
+	// Recent work, etc.) can navigate to the result instead of leaving it on
+	// the "Creating issue" active wording. The task's source kind remains
+	// quick_create, derived from its typed context. Best-effort: a write failure
+	// here doesn't block the inbox notification, which is the more important
+	// signal to the user.
 	if err := s.Queries.LinkTaskToIssue(ctx, db.LinkTaskToIssueParams{
 		ID:      task.ID,
 		IssueID: issue.ID,
