@@ -68,9 +68,9 @@ a pointer.
 | --- | --- |
 | A direct reply to an agent resolves through `routeReplyToParentAuthor` before any assignee fallback | `server/internal/handler/comment.go` (search `parentComment.AuthorType == "agent"` inside `computeCommentAgentTriggers`) |
 | A member-authored thread with an explicit or task-derived agent owner resolves through `routeThreadRootOwners` and returns before the final fallback | `server/internal/handler/comment.go` (search `routeThreadRootOwners` inside `computeCommentAgentTriggers`) |
-| If the direct parent is a member and no thread owner handled the reply, the reply returns no trigger instead of invoking `routeAssigneeFallback` | `server/internal/handler/comment.go` (search `A plain member-to-member reply`) |
-| Top-level member comments retain the final agent/squad assignee fallback because they have no parent | `server/internal/handler/comment.go` (the final `routeAssigneeFallback` call in `computeCommentAgentTriggers`) |
-| Regression coverage checks Agent and Squad assignees through both trigger preview and actual comment creation/enqueue | `server/internal/handler/comment_trigger_preview_test.go` (search `PlainReplyToUnownedMemberRootSkipsAssigneeFallback`) |
+| If the direct parent is a member and no thread owner handled the reply, the reply falls through to the final `routeAssigneeFallback`, same as a top-level member comment (HOM-18) | `server/internal/handler/comment.go` (the final `routeAssigneeFallback` call in `computeCommentAgentTriggers`) |
+| Top-level member comments and plain member replies in unowned threads both reach the final agent/squad assignee fallback | `server/internal/handler/comment.go` (the final `routeAssigneeFallback` call in `computeCommentAgentTriggers`) |
+| Regression coverage checks Agent and Squad assignees through both trigger preview and actual comment creation/enqueue | `server/internal/handler/comment_trigger_preview_test.go` (search `PlainReplyToUnownedMemberRootFallsBackToAssignee`) |
 
 ## Edit-preview pending-task dedup
 

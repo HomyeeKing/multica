@@ -173,7 +173,7 @@ func requirePreviewAgents(t *testing.T, preview CommentTriggerPreviewResponse, w
 	}
 }
 
-func TestCommentTriggers_PlainReplyToUnownedMemberRootSkipsAssigneeFallback(t *testing.T) {
+func TestCommentTriggers_PlainReplyToUnownedMemberRootFallsBackToAssignee(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -212,14 +212,14 @@ func TestCommentTriggers_PlainReplyToUnownedMemberRootSkipsAssigneeFallback(t *t
 				Content:  replyContent,
 				ParentID: &rootID,
 			})
-			requirePreviewAgents(t, preview)
+			requirePreviewAgents(t, preview, tt.routedAgentID)
 
 			postCommentForTriggerPreviewTest(t, issueID, map[string]any{
 				"content":   replyContent,
 				"parent_id": rootID,
 			})
-			if got := countQueuedCommentTriggerTasks(t, issueID, tt.routedAgentID); got != 0 {
-				t.Fatalf("plain member reply queued assignee tasks = %d, want 0", got)
+			if got := countQueuedCommentTriggerTasks(t, issueID, tt.routedAgentID); got != 1 {
+				t.Fatalf("plain member reply queued assignee tasks = %d, want 1", got)
 			}
 		})
 	}

@@ -317,7 +317,7 @@ func TestCommentTriggerOnComment(t *testing.T) {
 		}
 	})
 
-	t.Run("reply to unowned member thread without mentions does not trigger assignee", func(t *testing.T) {
+	t.Run("reply to unowned member thread without mentions falls back to assignee", func(t *testing.T) {
 		clearTasks(t, issueID)
 		// Member starts a thread.
 		threadID := postComment(t, issueID, "Hey team, what do you think?", nil)
@@ -325,8 +325,8 @@ func TestCommentTriggerOnComment(t *testing.T) {
 		clearTasks(t, issueID)
 		// Another member reply (same user in this test, but the key is parent is by member).
 		postComment(t, issueID, "I agree with you", strPtr(threadID))
-		if n := countPendingTasks(t, issueID); n != 0 {
-			t.Errorf("expected 0 pending tasks (unowned member thread), got %d", n)
+		if n := countPendingTasks(t, issueID); n != 1 {
+			t.Errorf("expected 1 pending task (assignee fallback for unowned member thread), got %d", n)
 		}
 	})
 

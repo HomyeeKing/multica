@@ -2707,12 +2707,14 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 			}
 			return triggers, nil
 		}
-		// A plain member-to-member reply must not start the issue assignee just
-		// because the thread has no agent owner. Explicit mentions and existing
-		// conversation owners were already resolved above.
-		if parentComment.AuthorType == "member" {
-			return nil, nil
-		}
+		// A plain member reply in a thread with no agent owner still falls back to
+		// the issue assignee, same as a top-level member comment (HOM-18).
+		// Reverting MUL-5958: suppressing the fallback here meant that an issue
+		// assigned to an agent/squad AFTER creation never forwarded member replies
+		// to the assignee, because the human-authored root thread has no agent
+		// participation to route through. Explicit @-mentions and existing
+		// conversation owners were already resolved above, so this only affects the
+		// plain-reply case that the reporter expects to reach the assignee.
 	}
 
 	if trigger, ok := h.routeAssigneeFallback(ctx, issue, actorType, actorID, opts); ok {
